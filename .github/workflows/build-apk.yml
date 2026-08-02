@@ -3,10 +3,11 @@ name: Build Android APK
 # Builds the phone app in the cloud and attaches the APK to the run, so you
 # never need Android Studio or a PC. Download it from the run's Artifacts
 # section on your phone and open it to install.
+#
+# MANUAL ONLY. Editing files never starts a build. To build one:
+#   Actions tab -> "Build Android APK" -> "Run workflow"
+# An APK build takes ~3 minutes of runner time, so it only runs when you ask.
 on:
-  push:
-    branches: [main]
-    paths: ["android/**", ".github/workflows/android.yml"]
   workflow_dispatch:
 
 # Publishing a release needs write access to the repo. New repositories give
@@ -47,7 +48,7 @@ jobs:
       # you can bookmark on your phone. The artifact above is the guaranteed
       # copy, so a publishing hiccup never marks a good build as failed.
       - name: Publish to the latest release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'   # only when run from the main branch
         continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
