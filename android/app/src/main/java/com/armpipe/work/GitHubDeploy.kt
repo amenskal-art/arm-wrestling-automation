@@ -26,6 +26,17 @@ object GitHubDeploy {
     const val TOKEN_PAGE =
         "https://github.com/settings/tokens/new?scopes=repo,workflow&description=Arm%20Pipeline%20deploy"
 
+    /** Modal has no OAuth for third-party apps, so the token is created here. */
+    const val MODAL_TOKENS_PAGE = "https://modal.com/settings/tokens"
+
+    fun addSecretPage(repo: String) =
+        "https://github.com/$repo/settings/secrets/actions/new"
+
+    fun secretsPage(repo: String) =
+        "https://github.com/$repo/settings/secrets/actions"
+
+    val REQUIRED_SECRETS = listOf("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET")
+
     private suspend fun call(req: Request): String =
         suspendCancellableCoroutine { cont ->
             client.newCall(req).enqueue(object : Callback {
@@ -62,6 +73,40 @@ object GitHubDeploy {
                 token
             ).post(body).build()
         )
+    }
+
+    /**
+     * Which Actions secrets the repo already has. Only names come back, never
+     * values, so this is safe to show in the app.
+     */
+    suspend fun secretNames(repo: String, token: String): List<String> {
+        val body = call(
+            builder("https://api.github.com/repos/$repo/actions/secrets?per_page=100", token)
+                .get().build()
+        )
+        return json.parseToJsonElement(body).jsonObject["secrets"]?.jsonArray
+            ?.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }
+            ?: emptyList()
+    }
+
+    /**
+     * The deploy workflow commits the live address to backend_url.txt, so the
+     * app can read it instead of asking anyone to type a URL.
+     */
+    suspend fun backendUrl(repo: String, token: String): String? {
+        val body = call(
+            builder("https://api.github.com/repos/$repo/contents/backend_url.txt", token)
+                .header("Accept", "application/vnd.github.raw+json")
+                .get().build()
+        )
+        val text = body.trim()
+        // The raw media type returns the file itself; fall back to the JSON form.
+        val url = if (text.startsWith("http")) text else runCatching {
+            val b64 = json.parseToJsonElement(text).jsonObject["content"]
+                ?.jsonPrimitive?.content.orEmpty().replace("\n", "")
+            String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT)).trim()
+        }.getOrNull().orEmpty()
+        return url.takeIf { it.startsWith("http") }
     }
 
     /** Latest run of that workflow, for the progress readout. */
