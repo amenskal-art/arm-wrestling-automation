@@ -49,7 +49,8 @@ class JobService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) =
+        Service.START_STICKY
 
     override fun onDestroy() {
         scope.cancel()
