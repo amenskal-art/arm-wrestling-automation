@@ -658,11 +658,23 @@ fun DeployScreen() {
         }
     }
 
+    var secrets by remember { mutableStateOf<List<String>?>(null) }
+    var checking by remember { mutableStateOf(false) }
+
+    fun checkSecrets() {
+        if (repo.isBlank() || token.isBlank()) return
+        scope.launch {
+            checking = true
+            secrets = runCatching { GitHubDeploy.secretNames(repo, token) }.getOrNull()
+            checking = false
+        }
+    }
+
     Section(
         "Deploy the backend",
-        "Modal has no sign-in for third-party apps, so your Modal token lives in " +
-            "GitHub as an Actions secret and never touches this phone. This button " +
-            "asks GitHub to run the deploy workflow."
+        "Modal does not offer a sign-in for third-party apps — no app can create " +
+            "a Modal token for you. You make one yourself in the browser, store it " +
+            "in GitHub once, and it never touches this phone again."
     ) {
         Field("Repository", repo, { repo = it }, placeholder = "your-name/arm-pipeline")
         Field("Workflow file", workflow, { workflow = it })
@@ -675,9 +687,68 @@ fun DeployScreen() {
         ) {
             Icon(Icons.Filled.OpenInBrowser, null)
             Spacer(Modifier.width(8.dp))
-            Text("Create a token in the browser")
+            Text("Create a GitHub token")
         }
         Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = { checkSecrets() },
+            enabled = !checking && repo.isNotBlank() && token.isNotBlank(),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (checking) "Checking…" else "Check the Modal credentials") }
+
+        secrets?.let { have ->
+            Spacer(Modifier.height(12.dp))
+            GitHubDeploy.REQUIRED_SECRETS.forEach { name ->
+                val ok = name in have
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        if (ok) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline,
+                        null, tint = if (ok) Pin else Vinyl,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Text(name, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
+                        color = Chalk, modifier = Modifier.weight(1f))
+                    Text(if (ok) "set" else "missing",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (ok) Pin else Vinyl)
+                }
+            }
+            if (GitHubDeploy.REQUIRED_SECRETS.any { it !in have }) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Deploying will fail until both are set. Copy the two values " +
+                        "from Modal, then add them to GitHub under exactly these names.",
+                    style = MaterialTheme.typography.bodySmall, color = Tape
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { openTab(ctx, GitHubDeploy.MODAL_TOKENS_PAGE) },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.OpenInBrowser, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("1 — Get the token from Modal")
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = { openTab(ctx, GitHubDeploy.addSecretPage(repo)) },
+                    enabled = repo.isNotBlank(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.OpenInBrowser, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("2 — Add it to GitHub")
+                }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
         Button(
             onClick = {
                 scope.launch {
@@ -739,16 +810,66 @@ fun DeployScreen() {
 @Composable
 fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var url by rememberSaveable(ui.baseUrl) { mutableStateOf(ui.baseUrl) }
     var password by rememberSaveable { mutableStateOf("") }
+    var fetching by remember { mutableStateOf(false) }
+    var fetchNote by remember { mutableStateOf("") }
+    var prefs by remember { mutableStateOf(com.armpipe.data.Prefs.State()) }
+
+    LaunchedEffect(Unit) {
+        com.armpipe.data.Prefs.flow(ctx).collect { prefs = it }
+    }
+
+    // The deploy workflow records the live address in the repo, so the app can
+    // just go and read it. Runs by itself as soon as GitHub details exist.
+    fun fetchUrl(quiet: Boolean) {
+        if (prefs.ghRepo.isBlank() || prefs.ghToken.isBlank()) {
+            if (!quiet) fetchNote = "Add your repository and token on the Deploy screen first."
+            return
+        }
+        scope.launch {
+            fetching = true
+            val found = runCatching {
+                GitHubDeploy.backendUrl(prefs.ghRepo, prefs.ghToken)
+            }.getOrNull()
+            fetching = false
+            if (found != null) {
+                url = found
+                vm.rememberUrl(found)
+                fetchNote = "Address found. Now set or enter your password."
+            } else if (!quiet) {
+                fetchNote = "No address recorded yet — deploy the backend first."
+            }
+        }
+    }
+
+    LaunchedEffect(prefs.ghRepo, prefs.ghToken, ui.baseUrl) {
+        if (url.isBlank() && prefs.ghRepo.isNotBlank()) fetchUrl(quiet = true)
+    }
 
     Section(
         "Backend address",
-        "The URL printed when the backend deployed, like " +
-            "https://yourname--arm-pipeline.modal.run"
+        "Fetched from your repository automatically. You should not have to type it."
     ) {
         Field("Modal URL", url, { url = it }, placeholder = "https://…modal.run")
-        Field("Password", password, { password = it }, password = true)
+        OutlinedButton(
+            onClick = { fetchUrl(quiet = false) },
+            enabled = !fetching,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Filled.CloudDownload, null)
+            Spacer(Modifier.width(8.dp))
+            Text(if (fetching) "Looking…" else "Get the address from GitHub")
+        }
+        if (fetchNote.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(fetchNote, style = MaterialTheme.typography.bodySmall, color = Tape)
+        }
+        Spacer(Modifier.height(14.dp))
+        Field("Password", password, { password = it }, password = true,
+            placeholder = "You choose this on first connect")
         Button(
             onClick = { vm.connect(url, password); password = "" },
             enabled = !ui.connecting && url.isNotBlank() && password.length >= 4,
@@ -762,7 +883,9 @@ fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
                 vm.rememberUrl(url)
                 openTab(ctx, url.trimEnd('/') + "/auth?redirect=armpipe%3A%2F%2Fauth")
             },
-            enabled = url.isNotBlank(),
+            // Only the address is needed here - the password is typed in the
+            // browser, which is the whole point of this route.
+            enabled = url.trim().startsWith("http"),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -771,7 +894,10 @@ fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
             Text("Sign in with the browser instead")
         }
         Text(
-            "The browser signs in and hands the session straight back to this app.",
+            if (url.trim().startsWith("http"))
+                "The browser signs in and hands the session straight back to this app."
+            else
+                "Needs the address above first. Fetch it from GitHub, or paste it.",
             style = MaterialTheme.typography.bodySmall, color = Tape,
             modifier = Modifier.padding(top = 6.dp)
         )
