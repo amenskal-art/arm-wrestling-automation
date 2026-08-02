@@ -1,0 +1,51 @@
+name: Build Android APK
+
+# Builds the phone app in the cloud and attaches the APK to the run, so you
+# never need Android Studio or a PC. Download it from the run's Artifacts
+# section on your phone and open it to install.
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build the APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-pipeline-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      # Also publish a rolling release so the APK has a stable download link
+      # you can bookmark on your phone.
+      - name: Publish to the latest release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Arm Pipeline APK (latest)
+          files: android/app/build/outputs/apk/release/*.apk
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
