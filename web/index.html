@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#171310">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Arm Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --pad:#171310;          /* table pad, warm black */
+  --pad-2:#211a15;
+  --pad-3:#2c231c;
+  --chalk:#f3efe7;
+  --tape:#a2968a;         /* athletic tape, for quiet text */
+  --vinyl:#dc3b26;        /* elbow pad red — the action colour */
+  --ref:#5a8fc7;          /* referee blue — the running colour */
+  --pin:#c8b273;          /* brass, for finished work */
+  --line:#3a2f26;
+  --r:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--pad);
+  color:var(--chalk);
+  font-family:'Archivo',system-ui,-apple-system,sans-serif;
+  font-size:15px;line-height:1.45;
+  padding-bottom:120px;
+  overscroll-behavior-y:contain;
+}
+h1,h2,h3,.display{font-family:'Anton',Impact,sans-serif;font-weight:400;letter-spacing:.01em;text-transform:uppercase}
+button,input,select,textarea{font-family:inherit;font-size:16px}
+a{color:var(--ref)}
+
+/* ---------- header ---------- */
+header{
+  position:sticky;top:0;z-index:30;
+  background:linear-gradient(var(--pad) 72%,rgba(23,19,16,0));
+  padding:calc(env(safe-area-inset-top) + 18px) 18px 14px;
+}
+header h1{font-size:30px;margin:0;line-height:.95}
+header h1 em{font-style:normal;color:var(--vinyl)}
+header p{margin:5px 0 0;color:var(--tape);font-size:12.5px;letter-spacing:.09em;text-transform:uppercase}
+
+/* ---------- stage cards ---------- */
+main{padding:0 14px}
+.stage{
+  position:relative;
+  background:var(--pad-2);
+  border:1px solid var(--line);
+  border-left:3px solid var(--line);
+  border-radius:var(--r);
+  padding:15px 16px;margin-bottom:11px;
+  transition:border-color .25s,background .25s;
+}
+.stage[data-state="running"]{border-left-color:var(--ref);background:var(--pad-3)}
+.stage[data-state="done"]{border-left-color:var(--pin)}
+.stage[data-state="failed"]{border-left-color:var(--vinyl)}
+.stage .num{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tape);
+  letter-spacing:.16em;display:block;margin-bottom:3px;
+}
+.stage h2{font-size:20px;margin:0}
+.stage .what{color:var(--tape);font-size:13px;margin:4px 0 12px}
+.stage .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* the signature: a stamped PIN mark when a stage lands */
+.stamp{
+  position:absolute;top:12px;right:12px;
+  font-family:'Anton',sans-serif;font-size:13px;letter-spacing:.14em;
+  color:var(--pin);border:2px solid var(--pin);border-radius:4px;
+  padding:2px 7px;transform:rotate(-9deg);opacity:.9;
+  animation:stamp .32s cubic-bezier(.2,1.6,.4,1) both;
+}
+@keyframes stamp{from{transform:rotate(-9deg) scale(2.1);opacity:0}to{transform:rotate(-9deg) scale(1);opacity:.9}}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--ref);animation:pulse 1.1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+
+/* ---------- controls ---------- */
+button{
+  background:var(--pad-3);color:var(--chalk);
+  border:1px solid var(--line);border-radius:9px;
+  padding:10px 14px;font-weight:600;font-size:14px;cursor:pointer;
+}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.4}
+button.go{background:var(--vinyl);border-color:var(--vinyl);color:#fff}
+button.ghost{background:transparent}
+button.small{padding:7px 11px;font-size:13px}
+:focus-visible{outline:2px solid var(--ref);outline-offset:2px}
+
+label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--tape);margin:14px 0 5px}
+input[type=text],input[type=password],input[type=number],select,textarea{
+  width:100%;background:var(--pad);color:var(--chalk);
+  border:1px solid var(--line);border-radius:9px;padding:11px 12px;
+}
+textarea{min-height:96px;resize:vertical}
+.hint{color:var(--tape);font-size:12px;margin-top:5px}
+.toggle{display:flex;align-items:center;gap:9px;margin:9px 0;color:var(--chalk);font-size:14px;text-transform:none;letter-spacing:0}
+.toggle input{width:20px;height:20px;accent-color:var(--vinyl)}
+
+/* ---------- log ---------- */
+.log{
+  display:none;margin-top:11px;background:#0d0a08;border:1px solid var(--line);
+  border-radius:9px;padding:10px;max-height:190px;overflow:auto;
+  font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.55;
+  color:#bcd4a8;white-space:pre-wrap;word-break:break-word;
+}
+.stage[data-state="running"] .log,.stage[data-state="failed"] .log,.stage.showlog .log{display:block}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:9px;overflow:hidden;display:none}
+.stage[data-state="running"] .bar{display:block}
+.bar i{display:block;height:100%;width:0;background:var(--ref);transition:width .4s}
+
+/* ---------- sheets ---------- */
+.sheet{
+  position:fixed;inset:0;z-index:60;background:var(--pad);
+  overflow-y:auto;padding:calc(env(safe-area-inset-top) + 16px) 16px 130px;
+  transform:translateY(100%);transition:transform .28s ease;
+}
+.sheet.open{transform:translateY(0)}
+.sheet h2{font-size:24px;margin:0 0 2px}
+.sheet .close{position:absolute;top:calc(env(safe-area-inset-top) + 14px);right:14px}
+fieldset{border:1px solid var(--line);border-radius:var(--r);margin:18px 0 0;padding:4px 14px 16px}
+legend{font-family:'Anton',sans-serif;font-size:13px;letter-spacing:.1em;color:var(--vinyl);padding:0 7px}
+
+/* ---------- files ---------- */
+.file{display:flex;gap:11px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line)}
+.file .k{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--pad);background:var(--tape);border-radius:4px;padding:2px 6px;text-transform:uppercase}
+.file .n{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- bottom bar ---------- */
+.dock{
+  position:fixed;left:0;right:0;bottom:0;z-index:50;
+  display:flex;gap:8px;padding:11px 14px calc(env(safe-area-inset-bottom) + 11px);
+  background:linear-gradient(rgba(23,19,16,0),var(--pad) 34%);
+}
+.dock button{flex:1}
+
+.toast{
+  position:fixed;left:50%;bottom:96px;transform:translate(-50%,20px);
+  background:var(--chalk);color:var(--pad);font-weight:600;font-size:13.5px;
+  padding:10px 16px;border-radius:999px;opacity:0;transition:.25s;z-index:90;pointer-events:none;
+  max-width:88vw;text-align:center;
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ---------- gate ---------- */
+#gate{position:fixed;inset:0;z-index:100;background:var(--pad);display:none;
+  flex-direction:column;justify-content:center;padding:26px}
+#gate.open{display:flex}
+#gate h1{font-size:34px;margin:0 0 4px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h1>Arm <em style="color:var(--vinyl);font-style:normal">Pipeline</em></h1>
+  <p class="hint" id="gateMsg">Set a password. It locks this URL so nobody else can spend your API credit.</p>
+  <input type="password" id="gatePw" placeholder="Password" autocomplete="current-password">
+  <div style="height:12px"></div>
+  <button class="go" onclick="doLogin()" id="gateBtn">Unlock</button>
+</div>
+
+<header>
+  <h1>Arm <em>Pipeline</em></h1>
+  <p id="hdr">script → voice → cut → effects</p>
+</header>
+
+<main id="stages"></main>
+
+<div class="dock">
+  <button class="ghost" onclick="openSheet('settings')">Settings</button>
+  <button class="ghost" onclick="openSheet('files')">Files</button>
+  <button class="go" id="mainBtn" onclick="runAll()">Run everything</button>
+</div>
+
+<!-- ================= SETTINGS ================= -->
+<section class="sheet" id="settings">
+  <button class="close" onclick="closeSheet()">Done</button>
+  <h2>Settings</h2>
+  <p class="hint">Typed once, kept on your Modal volume, reused by every stage.</p>
+
+  <fieldset>
+    <legend>Keys &amp; sources</legend>
+    <label>Gemini API key</label>
+    <input type="password" id="api_key" placeholder="paste once">
+    <p class="hint" id="keyState"></p>
+
+    <label>Video links — one per line</label>
+    <textarea id="links" placeholder="https://www.youtube.com/watch?v=..."></textarea>
+    <p class="hint">Analysed once each, then cached forever. Adding a link later only costs one new analysis.</p>
+
+    <label>Knowledge file (.txt)</label>
+    <input type="file" id="f_reference" accept=".txt" onchange="upload('reference',this)">
+    <p class="hint" id="n_reference"></p>
+
+    <label>Reference voice clip (3&nbsp;seconds)</label>
+    <input type="file" id="f_voice" accept="audio/*" onchange="upload('voice',this)">
+    <p class="hint" id="n_voice"></p>
+
+    <label>Exact words spoken in that clip</label>
+    <textarea id="voice_ref_text" style="min-height:64px"></textarea>
+
+    <label>YouTube cookies.txt — optional</label>
+    <input type="file" id="f_cookies" accept=".txt" onchange="upload('cookies',this)">
+    <p class="hint" id="n_cookies">Add this if downloads start failing with a bot check. Export it with a “Get cookies.txt” browser extension while signed in to YouTube.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>01 Script</legend>
+    <label>Model</label>
+    <input type="text" id="model" list="models">
+    <label>Target word count</label>
+    <input type="number" id="word_count" min="100" max="5000" step="50">
+    <label>Max reference characters — 0 sends the whole file</label>
+    <input type="number" id="max_ref_chars" min="0" step="50000">
+  </fieldset>
+
+  <fieldset>
+    <legend>02 Voice</legend>
+    <label>Language</label>
+    <select id="language"></select>
+    <p class="hint" id="voiceCache">Cloning happens once per reference clip, then it is memorised.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>03 Cut</legend>
+    <label>Transcriber (AI 1)</label>
+    <input type="text" id="model_audio" list="models">
+    <label>Scene watcher (AI 2)</label>
+    <input type="text" id="model_vision" list="models">
+    <label>Matcher (AI 3)</label>
+    <input type="text" id="model_match" list="models">
+    <label>Minimum source height</label>
+    <input type="number" id="min_height" step="90">
+    <label>Longest single scene (seconds)</label>
+    <input type="number" id="max_scene_len" step="0.5">
+    <label>Times one scene may be reused</label>
+    <input type="number" id="max_scene_uses" step="1">
+  </fieldset>
+
+  <fieldset>
+    <legend>04 Effects</legend>
+    <label>Model</label>
+    <input type="text" id="model_fx" list="models">
+    <label>Neon hand skeleton</label>
+    <select id="hand_fx_mode">
+      <option>AI-decided</option><option>Always on</option><option>Off</option>
+    </select>
+    <div class="toggle"><input type="checkbox" id="voice_safe"><span>Never warp the voice-over</span></div>
+    <div class="toggle"><input type="checkbox" id="auto_suggest"><span>Add effects from motion spikes</span></div>
+    <div class="toggle"><input type="checkbox" id="film_grain"><span>Film grain</span></div>
+    <div class="toggle"><input type="checkbox" id="draw_hud"><span>HUD overlay</span></div>
+    <div class="toggle"><input type="checkbox" id="draw_labels"><span>On-screen labels</span></div>
+    <div class="toggle"><input type="checkbox" id="cap_1080p"><span>Cap output at 1080p</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Caches</legend>
+    <p class="hint">Clearing a cache means the next run pays for that analysis again.</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="small" onclick="clearCache('video')">Scene catalogs</button>
+      <button class="small" onclick="clearCache('audio')">Transcripts</button>
+      <button class="small" onclick="clearCache('fx')">Effect plans</button>
+      <button class="small" onclick="clearCache('outputs')">All outputs</button>
+    </div>
+  </fieldset>
+
+  <div style="height:20px"></div>
+  <button class="go" style="width:100%" onclick="saveConfig(true)">Save settings</button>
+</section>
+
+<!-- ================= FILES ================= -->
+<section class="sheet" id="files">
+  <button class="close" onclick="closeSheet()">Done</button>
+  <h2>Files</h2>
+  <p class="hint">Tap to download to your phone.</p>
+  <div id="fileList"></div>
+</section>
+
+<datalist id="models">
+  <option>gemini-3.5-flash</option><option>gemini-3.1-flash-lite</option>
+  <option>gemini-3-flash</option><option>gemini-2.5-flash</option>
+  <option>gemini-2.5-pro</option><option>gemini-2.5-flash-lite</option>
+</datalist>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const LANGS=["Auto","English","Chinese","Japanese","Korean","German","French","Russian","Portuguese","Spanish","Italian"];
+const BOOLS=["voice_safe","auto_suggest","film_grain","draw_hud","draw_labels","cap_1080p"];
+const NUMS=["word_count","max_ref_chars","min_height","max_scene_len","max_scene_uses"];
+const TEXTS=["model","model_audio","model_vision","model_match","model_fx","hand_fx_mode","language","voice_ref_text"];
+
+const ORDER=["script","voice","cut","fx"];
+let activeJob=null;
+const STAGES=[
+ {id:"script",n:"01",title:"Write the script",what:"Gemini reads your knowledge file and writes the narration."},
+ {id:"voice", n:"02",title:"Speak it",       what:"Qwen3-TTS on a cloud GPU, in your cloned voice."},
+ {id:"cut",   n:"03",title:"Cut the video",  what:"Three AIs transcribe, watch every source clip, and build the edit."},
+ {id:"fx",    n:"04",title:"Add the effects",what:"Zooms, ramps, hand tracking, grade — then the final render."}
+];
+
+let cfg={}, polling={}, titles=[];
+
+/* ---------- tiny helpers ---------- */
+const $=s=>document.querySelector(s);
+async function api(path,opts={}){
+  const r=await fetch(path,{credentials:'same-origin',...opts});
+  if(r.status===401){gate(false);throw new Error('Locked');}
+  if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m);}
+  return r.headers.get('content-type')?.includes('json')?r.json():r.text();
+}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');
+  clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove('show'),2600);}
+
+/* ---------- gate ---------- */
+function gate(isNew){
+  $('#gate').classList.add('open');
+  $('#gateMsg').textContent=isNew
+    ? "Set a password. It locks this URL so nobody else can spend your API credit."
+    : "Enter your password.";
+  $('#gateBtn').textContent=isNew?"Set password":"Unlock";
+}
+async function doLogin(){
+  try{
+    await api('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:$('#gatePw').value})});
+    $('#gate').classList.remove('open');
+    boot();
+  }catch(e){toast(e.message)}
+}
+
+/* ---------- stages ---------- */
+function renderStages(){
+  $('#stages').innerHTML=STAGES.map(s=>`
+   <article class="stage" id="st-${s.id}" data-state="idle">
+     <span class="num">${s.n}</span>
+     <h2>${s.title}</h2>
+     <p class="what">${s.what}</p>
+     ${s.id==='script'?`
+       <div class="row" style="margin-bottom:9px">
+         <button class="small" onclick="run('titles')">Suggest topics</button>
+       </div>
+       <input type="text" id="titleBox" placeholder="Title — type one or pick a suggestion">
+       <select id="titlePick" style="margin-top:8px;display:none" onchange="$('#titleBox').value=this.value"></select>
+       <div style="height:10px"></div>`:''}
+     <div class="row">
+       <button class="go small" onclick="run('${s.id}')">Run this stage</button>
+       <button class="ghost small" onclick="toggleLog('${s.id}')">Log</button>
+       <span class="stat" style="color:var(--tape);font-size:12.5px"></span>
+     </div>
+     <div class="bar"><i></i></div>
+     <div class="log"></div>
+   </article>`).join('');
+}
+function toggleLog(id){$('#st-'+id).classList.toggle('showlog')}
+
+function setState(id,state,note){
+  const el=$('#st-'+id); if(!el)return;
+  el.dataset.state=state;
+  el.querySelector('.stat').innerHTML =
+    state==='running' ? '<span class="pulse"></span>' : (note||'');
+  const old=el.querySelector('.stamp'); if(old)old.remove();
+  if(state==='done'){const b=document.createElement('div');b.className='stamp';b.textContent='PINNED';el.appendChild(b);}
+}
+
+async function run(stage){
+  const uiId = (stage==='titles'||stage==='all') ? 'script' : stage;
+  const body={};
+  // Only a lone script run needs a title. The full run picks a topic itself.
+  body.title=$('#titleBox')?$('#titleBox').value.trim():'';
+  if(stage==='script'&&!body.title){
+    toast('Type a title, or tap Suggest topics.');return;
+  }
+  await saveConfig(false);
+  try{
+    const {job_id}=await api('/api/run/'+stage,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    activeJob=job_id;
+    if(stage==='all'){
+      STAGES.forEach((s,i)=>{
+        setState(s.id,i===0?'running':'idle');
+        $('#st-'+s.id).querySelector('.log').textContent='';
+      });
+    }else{
+      setState(uiId,'running');
+      $('#st-'+uiId).querySelector('.log').textContent='';
+    }
+    setDock(true);
+    poll(job_id,uiId,stage);
+  }catch(e){toast(e.message)}
+}
+function runAll(){run('all')}
+
+function setDock(busy){
+  const b=$('#mainBtn');
+  b.textContent=busy?'Stop':'Run everything';
+  b.onclick=busy?stopAll:runAll;
+  b.style.background=busy?'var(--pad-3)':'var(--vinyl)';
+  b.style.borderColor=busy?'var(--line)':'var(--vinyl)';
+}
+
+async function stopAll(){
+  if(!activeJob)return;
+  const running=STAGES.find(s=>$('#st-'+s.id).dataset.state==='running');
+  const what=running?`"${running.title}" is running. `:'';
+  if(!confirm(what+'Stopping throws away this stage. Everything already cached '+
+              '— scene catalogs, transcripts, the cloned voice — is kept.'))return;
+  try{await api('/api/job/'+activeJob+'/cancel',{method:'POST'})}catch(e){}
+  Object.values(polling).forEach(clearInterval);
+  STAGES.forEach(s=>{if($('#st-'+s.id).dataset.state==='running')setState(s.id,'idle','stopped')});
+  activeJob=null;setDock(false);toast('Stopped.');
+}
+
+function poll(jobId,uiId,stage){
+  let since=0;
+  clearInterval(polling[uiId]);
+  polling[uiId]=setInterval(async()=>{
+    let j; try{j=await api(`/api/job/${jobId}?since=${since}`)}catch(e){return}
+    since=j.next;
+    // A full run reports its phase; light the card that is actually working.
+    let target=uiId;
+    if(stage==='all'&&ORDER.includes(j.phase||'')){
+      target=j.phase;
+      const idx=ORDER.indexOf(target);
+      ORDER.forEach((id,i)=>{
+        const st=$('#st-'+id).dataset.state;
+        if(i<idx&&st!=='done')setState(id,'done');
+        if(i===idx&&st==='idle')setState(id,'running');
+      });
+    }
+    const el=$('#st-'+target), box=el.querySelector('.log');
+    if(j.lines?.length){box.textContent+=j.lines.join('\n')+'\n';box.scrollTop=box.scrollHeight}
+    if(j.progress!=null)el.querySelector('.bar i').style.width=(j.progress*100)+'%';
+    if(j.status==='done'){
+      clearInterval(polling[uiId]);activeJob=null;setDock(false);
+      if(stage==='titles'&&j.result?.titles){showTitles(j.result.titles);}
+      else if(stage==='all'){
+        STAGES.forEach(s=>setState(s.id,'done'));
+        toast('All four stages finished. Check Files.');loadFiles();
+      }else{
+        setState(target,'done');toast('Finished. Check Files.');loadFiles();
+      }
+    }
+    if(j.status==='failed'||j.status==='cancelled'){
+      clearInterval(polling[uiId]);activeJob=null;setDock(false);
+      const stopped=j.status==='cancelled';
+      setState(target,stopped?'idle':'failed',
+               stopped?'stopped':(j.error||'').slice(0,60));
+    }
+  },1400);
+}
+function showTitles(list){
+  titles=list;
+  const sel=$('#titlePick');
+  sel.innerHTML=list.map(t=>`<option>${t.replace(/</g,'&lt;')}</option>`).join('');
+  sel.style.display='block';
+  $('#titleBox').value=list[0]||'';
+  setState('script','idle');
+  toast('Pick a topic, then run the stage.');
+}
+
+/* ---------- settings ---------- */
+async function loadConfig(){
+  cfg=await api('/api/config');
+  $('#links').value=(cfg.links||[]).join('\n');
+  TEXTS.forEach(k=>{if($('#'+k))$('#'+k).value=cfg[k]??''});
+  NUMS.forEach(k=>{if($('#'+k))$('#'+k).value=cfg[k]??''});
+  BOOLS.forEach(k=>{if($('#'+k))$('#'+k).checked=!!cfg[k]});
+  $('#keyState').textContent=cfg.api_key_set?'A key is saved. Leave blank to keep it.':'No key saved yet.';
+  $('#n_reference').textContent=cfg.ref_text_path_name||'No file yet.';
+  $('#n_voice').textContent=cfg.voice_ref_path_name||'No clip yet.';
+  if(cfg.cookies_file_name)$('#n_cookies').textContent=cfg.cookies_file_name;
+}
+async function saveConfig(loud){
+  const body={links:$('#links').value.split('\n').map(s=>s.trim()).filter(Boolean)};
+  TEXTS.forEach(k=>{if($('#'+k))body[k]=$('#'+k).value});
+  NUMS.forEach(k=>{if($('#'+k))body[k]=parseFloat($('#'+k).value)||0});
+  BOOLS.forEach(k=>{if($('#'+k))body[k]=$('#'+k).checked});
+  if($('#api_key').value.trim())body.api_key=$('#api_key').value.trim();
+  await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  if(loud){$('#api_key').value='';await loadConfig();toast('Settings saved.')}
+}
+async function upload(kind,input){
+  if(!input.files[0])return;
+  const fd=new FormData();fd.append('kind',kind);fd.append('file',input.files[0]);
+  toast('Uploading…');
+  try{const r=await api('/api/upload',{method:'POST',body:fd});
+    $('#n_'+kind).textContent=`${r.name} (${r.size_mb} MB)`;toast('Uploaded.');}
+  catch(e){toast(e.message)}
+}
+async function clearCache(what){
+  if(!confirm('Clear the '+what+' cache? The next run pays for it again.'))return;
+  try{const r=await api('/api/clear/'+what,{method:'POST'});toast(r.message);loadFiles();}
+  catch(e){toast(e.message)}
+}
+
+/* ---------- files ---------- */
+async function loadFiles(){
+  let list=[];try{list=await api('/api/files')}catch(e){return}
+  $('#fileList').innerHTML=list.length?list.map(f=>`
+    <div class="file">
+      <span class="k">${f.kind}</span>
+      <span class="n">${f.name}</span>
+      <a href="/api/file/${encodeURI(f.path)}" download><button class="small ghost">${f.mb} MB ↓</button></a>
+    </div>`).join(''):'<p class="hint">Nothing rendered yet. Run a stage.</p>';
+}
+
+/* ---------- sheets ---------- */
+function openSheet(id){document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('open'));
+  $('#'+id).classList.add('open');if(id==='files')loadFiles();}
+function closeSheet(){document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('open'))}
+
+/* ---------- boot ---------- */
+async function boot(){
+  renderStages();
+  $('#language').innerHTML=LANGS.map(l=>`<option>${l}</option>`).join('');
+  try{await loadConfig();await loadFiles();}catch(e){}
+}
+(async()=>{
+  const s=await (await fetch('/api/state',{credentials:'same-origin'})).json();
+  if(s.needs_password)gate(true);
+  else if(s.locked)gate(false);
+  else boot();
+})();
+</script>
+</body>
+</html>
