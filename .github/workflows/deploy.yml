@@ -1,0 +1,31 @@
+name: Deploy to Modal
+
+# Pushing to main redeploys the whole pipeline. You can trigger this from the
+# GitHub mobile app or the GitHub website on your phone — no PC needed.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["android/**", "README.md"]
+  workflow_dispatch:   # this is what the app's Deploy button triggers
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Modal
+        run: pip install --upgrade modal
+
+      - name: Deploy
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy modal_app.py
