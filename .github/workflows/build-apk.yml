@@ -9,6 +9,12 @@ on:
     paths: ["android/**", ".github/workflows/android.yml"]
   workflow_dispatch:
 
+# Publishing a release needs write access to the repo. New repositories give
+# workflows a read-only token by default, which is what produces
+# "Resource not accessible by integration" on the release step.
+permissions:
+  contents: write
+
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -38,9 +44,11 @@ jobs:
           if-no-files-found: error
 
       # Also publish a rolling release so the APK has a stable download link
-      # you can bookmark on your phone.
+      # you can bookmark on your phone. The artifact above is the guaranteed
+      # copy, so a publishing hiccup never marks a good build as failed.
       - name: Publish to the latest release
         if: github.ref == 'refs/heads/main'
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-latest
