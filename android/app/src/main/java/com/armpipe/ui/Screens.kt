@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -96,7 +97,7 @@ fun Field(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
-        placeholder = if (placeholder.isBlank()) null else ({ Text(placeholder, color = Tape) }),
+        placeholder = { if (placeholder.isNotBlank()) Text(placeholder, color = Tape) },
         singleLine = lines == 1,
         minLines = lines,
         visualTransformation = if (password) PasswordVisualTransformation()
@@ -686,7 +687,7 @@ fun DeployScreen() {
                     runCatching { GitHubDeploy.dispatch(repo, token, workflow) }
                         .onFailure { status = it.message ?: "GitHub refused the request." }
                         .onSuccess {
-                            repeat(60) {
+                            for (attempt in 0 until 90) {
                                 kotlinx.coroutines.delay(5000)
                                 val run = runCatching {
                                     GitHubDeploy.latestRun(repo, token, workflow)
@@ -697,7 +698,7 @@ fun DeployScreen() {
                                     run.conclusion == "success" -> "Deployed. Your backend is live."
                                     else -> "Failed: ${run.conclusion}. Open the run on GitHub."
                                 }
-                                if (run?.status == "completed") return@repeat
+                                if (run?.status == "completed") break
                             }
                         }
                     busy = false
