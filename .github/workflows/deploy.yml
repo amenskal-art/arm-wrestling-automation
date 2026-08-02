@@ -1,15 +1,18 @@
 name: Deploy to Modal
 
-# Pushing to main redeploys the whole pipeline. You can trigger this from the
-# GitHub mobile app or the GitHub website on your phone — no PC needed.
+# Pushing to main redeploys the pipeline, and the app's Deploy button triggers
+# this same workflow through workflow_dispatch.
 on:
   push:
     branches: [main]
-    paths-ignore: ["android/**", "README.md"]
-  workflow_dispatch:   # this is what the app's Deploy button triggers
+    # backend_url.txt is written by this workflow itself - never re-trigger on it.
+    paths-ignore: ["android/**", "README.md", "backend_url.txt"]
+  workflow_dispatch:
 
+# Needs write access to record the deployed URL back into the repo, which is
+# how the phone app discovers the address without you typing it.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
@@ -24,8 +27,45 @@ jobs:
       - name: Install Modal
         run: pip install --upgrade modal
 
+      - name: Check the Modal credentials exist
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          if [ -z "$MODAL_TOKEN_ID" ] || [ -z "$MODAL_TOKEN_SECRET" ]; then
+            echo "::error::Modal credentials are missing."
+            echo "Add them once at:"
+            echo "  https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "Names must be exactly MODAL_TOKEN_ID and MODAL_TOKEN_SECRET."
+            echo "Get the values from https://modal.com/settings/tokens (New token)."
+            exit 1
+          fi
+          echo "Credentials present."
+
       - name: Deploy
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: modal deploy modal_app.py
+
+      - name: Record the backend URL for the app
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          python - <<'PY' > backend_url.txt
+          import modal
+          print(modal.Function.from_name("arm-pipeline", "web").get_web_url())
+          PY
+          URL=$(cat backend_url.txt)
+          echo "Backend URL: $URL"
+          echo "### Backend is live" >> $GITHUB_STEP_SUMMARY
+          echo "$URL" >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit the URL so the app can find it
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend_url.txt
+          git diff --staged --quiet || git commit -m "Record deployed backend URL"
+          git push
