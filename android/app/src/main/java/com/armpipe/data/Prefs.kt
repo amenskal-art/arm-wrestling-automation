@@ -18,6 +18,7 @@ object Prefs {
     private val GH_TOKEN = stringPreferencesKey("gh_token")
     private val GH_WORKFLOW = stringPreferencesKey("gh_workflow")
     private val LAST_TITLE = stringPreferencesKey("last_title")
+    private val BACKEND_PW = stringPreferencesKey("backend_pw")
 
     data class State(
         val baseUrl: String = "",
@@ -26,6 +27,8 @@ object Prefs {
         val ghToken: String = "",
         val ghWorkflow: String = "deploy.yml",
         val lastTitle: String = "",
+        /** Generated on first connect. You never have to type or invent one. */
+        val backendPassword: String = "",
     ) {
         val connected get() = baseUrl.isNotBlank() && token.isNotBlank()
     }
@@ -38,11 +41,16 @@ object Prefs {
             ghToken = p[GH_TOKEN].orEmpty(),
             ghWorkflow = p[GH_WORKFLOW] ?: "deploy.yml",
             lastTitle = p[LAST_TITLE].orEmpty(),
+            backendPassword = p[BACKEND_PW].orEmpty(),
         )
     }
 
     suspend fun setConnection(ctx: Context, url: String, token: String) {
         ctx.store.edit { it[BASE_URL] = url.trimEnd('/'); it[TOKEN] = token }
+    }
+
+    suspend fun setBackendPassword(ctx: Context, pw: String) {
+        ctx.store.edit { it[BACKEND_PW] = pw }
     }
 
     suspend fun setToken(ctx: Context, token: String) {
