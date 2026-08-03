@@ -133,7 +133,7 @@ class MainActivity : ComponentActivity() {
                                 Dest.SOURCES -> SourcesScreen(ui, vm)
                                 Dest.MODELS -> ModelsScreen(ui, vm)
                                 Dest.FILES -> FilesScreen(ui, vm)
-                                Dest.DEPLOY -> DeployScreen()
+                                Dest.DEPLOY -> DeployScreen(ui, vm)
                                 Dest.CONNECTION -> ConnectionScreen(ui, vm)
                             }
                         }
