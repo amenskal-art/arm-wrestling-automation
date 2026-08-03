@@ -50,6 +50,11 @@ data class UiState(
     /** Set while a full run is in flight, so Stop works from any card. */
     val activeJobId: String? = null,
     val runningAll: Boolean = false,
+    // GitHub details, shared by the Deploy and Connection screens.
+    val ghRepo: String = "",
+    val ghToken: String = "",
+    val ghWorkflow: String = "deploy.yml",
+    val fetchingUrl: Boolean = false,
 ) {
     fun stage(id: String) = stages.first { it.id == id }
     val busy get() = stages.any { it.state == StageState.RUNNING }
@@ -83,14 +88,20 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                 Api.baseUrl = p.baseUrl
                 Api.token = p.token
                 val was = _ui.value.connected
-                _ui.update { it.copy(connected = p.connected, baseUrl = p.baseUrl) }
+                _ui.update {
+                    it.copy(
+                        connected = p.connected, baseUrl = p.baseUrl,
+                        ghRepo = p.ghRepo, ghToken = p.ghToken,
+                        ghWorkflow = p.ghWorkflow,
+                    )
+                }
                 if (p.connected && !was) refresh()
             }
         }
     }
 
     fun dismissMessage() = _ui.update { it.copy(message = null) }
-    private fun say(msg: String) = _ui.update { it.copy(message = msg) }
+    fun say(msg: String) = _ui.update { it.copy(message = msg) }
 
     /* ------------------------------------------------------------ connect */
 
@@ -120,6 +131,43 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
 
     fun rememberUrl(rawUrl: String) = viewModelScope.launch {
         Prefs.setBaseUrl(ctx, normalise(rawUrl))
+    }
+
+    fun saveGitHub(repo: String, token: String, workflow: String = "deploy.yml") =
+        viewModelScope.launch {
+            Prefs.setGitHub(ctx, repo, token, workflow)
+        }
+
+    /** Reads the address the deploy workflow recorded in your repo. */
+    fun fetchBackendUrl(loud: Boolean = true) = viewModelScope.launch {
+        val st = _ui.value
+        if (st.ghRepo.isBlank() || st.ghToken.isBlank()) {
+            if (loud) say("Enter your GitHub repository and token first.")
+            return@launch
+        }
+        _ui.update { it.copy(fetchingUrl = true) }
+        val found = runCatching {
+            com.armpipe.work.GitHubDeploy.backendUrl(st.ghRepo, st.ghToken)
+        }.getOrNull()
+        _ui.update { it.copy(fetchingUrl = false) }
+        when {
+            found != null -> {
+                Prefs.setBaseUrl(ctx, found)
+                say("Address found. Now choose a password.")
+            }
+            loud -> say("No address recorded yet — deploy the backend first.")
+        }
+    }
+
+    /** Primary actions are never disabled; they explain what is missing. */
+    fun connectChecked(url: String, password: String) = viewModelScope.launch {
+        val u = normalise(url)
+        when {
+            u.isBlank() -> say("Add the backend address first, or fetch it from GitHub.")
+            !u.startsWith("http") -> say("That does not look like a web address.")
+            password.length < 4 -> say("Choose a password of at least 4 characters.")
+            else -> connect(u, password)
+        }
     }
 
     fun disconnect() = viewModelScope.launch {
