@@ -356,13 +356,16 @@ def stage_voice(job_id: str, script_text: str = "", final: bool = True):
             pieces.append(w)
             if j != len(all_wavs) - 1:
                 pieces.append(gap)
-        final = np.concatenate(pieces)
+        # NOTE: do not name this `final` - that is the parameter that tells
+        # finish() whether this stage ends the job. Shadowing it with a numpy
+        # array made `if final:` raise on an ambiguous truth value.
+        audio = np.concatenate(pieces)
 
         out_dir = DATA / "voice"
         out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / f"voiceover_{time.strftime('%Y%m%d_%H%M%S')}.wav"
-        sf.write(str(out), final, sr)
-        seconds = round(len(final) / sr, 1)
+        sf.write(str(out), audio, sr)
+        seconds = round(len(audio) / sr, 1)
         log(f"{seconds}s of audio -> {out}")
 
         cfg["last_voice_path"] = str(out)
