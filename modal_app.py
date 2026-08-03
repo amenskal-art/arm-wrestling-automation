@@ -714,6 +714,45 @@ document.getElementById('pw').addEventListener('keydown',e=>{{if(e.key==='Enter'
         save_cfg(cfg)
         return {"ok": True, "chars": len(text), "name": dest.name}
 
+    @api.get("/api/knowledge")
+    async def knowledge_info(request: Request):
+        """Stats and a short preview only. The knowledge file can be hundreds
+        of KB, which no phone text field can render, so the full text is never
+        sent to the app."""
+        cfg = guard(request)
+        p = Path(cfg.get("ref_text_path", "") or "")
+        if not p.is_file():
+            return {"name": "", "chars": 0, "words": 0, "preview": ""}
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        return {
+            "name": p.name,
+            "chars": len(text),
+            "words": len(text.split()),
+            "preview": text[:1200],
+        }
+
+    @api.post("/api/knowledge/append")
+    async def knowledge_append(request: Request):
+        """Adds to the existing knowledge file instead of replacing it, so
+        pasting a few paragraphs never costs you the big import."""
+        cfg = guard(request)
+        body = await request.json()
+        extra = (body.get("text") or "").strip()
+        if not extra:
+            raise HTTPException(400, "Nothing to add.")
+        folder = DATA / "uploads"
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = Path(cfg.get("ref_text_path", "") or "")
+        if not dest.is_file():
+            dest = folder / "reference_pasted.txt"
+            dest.write_text("", encoding="utf-8")
+        with open(dest, "a", encoding="utf-8") as f:
+            f.write("\n\n" + extra)
+        cfg["ref_text_path"] = str(dest)
+        save_cfg(cfg)
+        total = dest.stat().st_size
+        return {"ok": True, "name": dest.name, "added": len(extra), "bytes": total}
+
     @api.get("/api/paste")
     async def paste_read(request: Request, kind: str = "reference"):
         cfg = guard(request)
