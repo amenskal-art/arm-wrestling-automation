@@ -23,6 +23,12 @@ data class Health(val ok: Boolean = false, val app: String = "")
 data class LoginResp(val ok: Boolean = false, val token: String = "")
 
 @Serializable
+data class BackendState(
+    @SerialName("needs_password") val needsPassword: Boolean = false,
+    val locked: Boolean = false,
+)
+
+@Serializable
 data class RunResp(@SerialName("job_id") val jobId: String)
 
 @Serializable
@@ -158,6 +164,12 @@ object Api {
         val resp: LoginResp = json.decodeFromString(call(r))
         token = resp.token
         return resp.token
+    }
+
+    /** Has this backend been claimed yet? Answered without any credentials. */
+    suspend fun state(candidate: String): BackendState {
+        val r = Request.Builder().url(candidate.trimEnd('/') + "/api/state").get().build()
+        return json.decodeFromString(call(r))
     }
 
     fun authPageUrl(): String =
