@@ -539,6 +539,23 @@ def list_voices() -> list:
     ]
 
 
+@app.function(image=base_image, volumes=VOL, timeout=120)
+def reset_password() -> str:
+    """Forgets the backend password so the next connect claims it fresh.
+
+    Everything else survives: your Gemini key, links, every cache, every
+    rendered file. Only the lock is removed. Any device still signed in is
+    signed out, because the session secret is rotated too.
+    """
+    cfg = load_cfg()
+    had = bool(cfg.get("password_hash"))
+    cfg["password_hash"] = ""
+    cfg["session_secret"] = ""
+    save_cfg(cfg)
+    return ("Password cleared. Open the app and tap Connect — it will set a "
+            "new one automatically." if had else "There was no password set.")
+
+
 @app.function(image=base_image, volumes=VOL, timeout=600)
 def clear_cache(what: str) -> str:
     """what: 'video' (AI-2 scene catalogs), 'audio', 'fx', 'outputs'."""
