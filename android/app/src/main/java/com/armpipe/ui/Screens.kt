@@ -418,7 +418,7 @@ fun KnowledgeScreen(ui: UiState, vm: PipelineViewModel) {
                             color = Tape)
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            ui.knowledgePreview.take(400) + "…",
+                            "${ui.knowledgePreview.take(400)}…",
                             style = MaterialTheme.typography.bodySmall, color = Tape,
                             maxLines = 6
                         )
