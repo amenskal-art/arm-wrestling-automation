@@ -39,8 +39,12 @@ data class UiState(
     val baseUrl: String = "",
     val loading: Boolean = false,
     val config: Config = Config(),
-    val knowledge: String = "",
+    // Only stats and a preview. Putting a 600 KB file into a text field is
+    // what crashed the app, so the full text stays on the server.
     val knowledgeName: String = "",
+    val knowledgeChars: Int = 0,
+    val knowledgeWords: Int = 0,
+    val knowledgePreview: String = "",
     val titleText: String = "",
     val suggestions: List<String> = emptyList(),
     val linksText: String = "",
@@ -249,13 +253,15 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(loading = true) }
         try {
             val cfg = Api.config()
-            val know = runCatching { Api.readKnowledge() }.getOrNull()
+            val know = runCatching { Api.knowledgeInfo() }.getOrNull()
             _ui.update {
                 it.copy(
                     config = cfg,
                     linksText = cfg.links.joinToString("\n"),
-                    knowledge = know?.text ?: it.knowledge,
-                    knowledgeName = cfg.refName,
+                    knowledgeName = know?.name ?: cfg.refName,
+                    knowledgeChars = know?.chars ?: 0,
+                    knowledgeWords = know?.words ?: 0,
+                    knowledgePreview = know?.preview.orEmpty(),
                 )
             }
             loadFiles()
@@ -295,15 +301,42 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setKnowledge(text: String) = _ui.update { it.copy(knowledge = text) }
-
-    fun saveKnowledge() = viewModelScope.launch {
+    /** Adds a short passage. Big files go through importKnowledge instead. */
+    fun appendKnowledge(text: String, onDone: () -> Unit) = viewModelScope.launch {
+        if (text.isBlank()) { say("Nothing to add."); return@launch }
         try {
-            val r = Api.writeKnowledge(_ui.value.knowledge)
-            _ui.update { it.copy(knowledgeName = r.name) }
-            say("Knowledge saved (${r.chars} characters).")
+            Api.appendKnowledge(text)
+            onDone()
+            refreshKnowledge()
+            say("Added ${text.length} characters.")
         } catch (e: Exception) {
-            say("Could not save the knowledge file.")
+            say("Could not add that text.")
+        }
+    }
+
+    /**
+     * Streams a picked .txt straight to the server. The contents are never
+     * held in UI state, so size does not matter.
+     */
+    fun importKnowledge(uri: Uri, name: String) = viewModelScope.launch {
+        say("Uploading…")
+        try {
+            Api.upload(ctx, "reference", uri, name)
+            refreshKnowledge()
+            say("Knowledge file imported.")
+        } catch (e: OutOfMemoryError) {
+            say("That file is too large to send from this phone.")
+        } catch (e: Exception) {
+            say("Import failed: ${e.message}")
+        }
+    }
+
+    private fun refreshKnowledge() = viewModelScope.launch {
+        runCatching { Api.knowledgeInfo() }.onSuccess { k ->
+            _ui.update {
+                it.copy(knowledgeName = k.name, knowledgeChars = k.chars,
+                        knowledgeWords = k.words, knowledgePreview = k.preview)
+            }
         }
     }
 
