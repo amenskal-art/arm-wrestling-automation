@@ -181,6 +181,15 @@ object Api {
         return json.decodeFromString(call(r))
     }
 
+    /** Replaces the password while signed in, and returns the new session. */
+    suspend fun changePassword(newPassword: String): String {
+        val resp: LoginResp = json.decodeFromString(
+            post("/api/password", buildJsonObject { put("password", newPassword) })
+        )
+        token = resp.token
+        return resp.token
+    }
+
     fun authPageUrl(): String =
         url("/auth?redirect=") + Uri.encode("armpipe://auth")
 

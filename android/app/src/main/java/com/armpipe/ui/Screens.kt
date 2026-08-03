@@ -890,6 +890,34 @@ fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
     var input by rememberSaveable(ui.baseUrl) { mutableStateOf(ui.baseUrl) }
     var password by rememberSaveable { mutableStateOf("") }
     var showPw by remember { mutableStateOf(false) }
+    var forgot by rememberSaveable { mutableStateOf(false) }
+    var confirmNewPw by remember { mutableStateOf(false) }
+
+    if (confirmNewPw) {
+        AlertDialog(
+            onDismissRequest = { confirmNewPw = false },
+            containerColor = Pad2, titleContentColor = Chalk, textContentColor = Tape,
+            icon = { Icon(Icons.Filled.LockReset, null, tint = Vinyl) },
+            title = { Text("Reset the password?") },
+            text = {
+                Text(
+                    "A new one is generated and saved on this phone — you will not " +
+                        "have to type or remember it. Any other device or browser " +
+                        "signed in to this backend gets signed out."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmNewPw = false; showPw = true; vm.regeneratePassword()
+                }) { Text("Reset it", color = Vinyl) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmNewPw = false }) {
+                    Text("Cancel", color = Tape)
+                }
+            }
+        )
+    }
 
     if (!ui.connected) {
         Section(
@@ -927,6 +955,66 @@ fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
                     colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
                     modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) { Text("Sign in") }
+                Spacer(Modifier.height(12.dp))
+                TextButton(onClick = { forgot = !forgot }) {
+                    Text(if (forgot) "Never mind" else "Forgot the password?",
+                        color = Ref)
+                }
+            }
+        }
+
+        if (forgot) {
+            var repo by rememberSaveable(ui.ghRepo) { mutableStateOf(ui.ghRepo) }
+            var ghToken by rememberSaveable(ui.ghToken) { mutableStateOf(ui.ghToken) }
+            Section(
+                "Reset the password",
+                "The backend cannot unlock itself, so this asks GitHub to run the " +
+                    "reset workflow. Your key, links, caches and videos all survive."
+            ) {
+                Field("Repository", repo, {
+                    repo = it; vm.saveGitHub(it, ghToken, ui.ghWorkflow)
+                }, placeholder = "your-name/arm-wrestling-automation")
+                Field("GitHub token", ghToken, {
+                    ghToken = it; vm.saveGitHub(repo, it, ui.ghWorkflow)
+                }, password = true, placeholder = "ghp_…")
+                OutlinedButton(
+                    onClick = { openTab(ctx, GitHubDeploy.TOKEN_PAGE) },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.OpenInBrowser, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Create a GitHub token")
+                }
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = { vm.resetPasswordViaGitHub(input) },
+                    enabled = !ui.resetting,
+                    colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Icon(Icons.Filled.LockReset, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (ui.resetting) "Resetting…" else "Reset the password")
+                }
+                if (ui.resetting) {
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(
+                        color = Ref, trackColor = Line,
+                        modifier = Modifier.fillMaxWidth().height(4.dp)
+                    )
+                }
+                if (ui.resetNote.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(ui.resetNote, style = MaterialTheme.typography.bodySmall,
+                        color = Tape)
+                }
+                Text(
+                    "Takes about a minute. The app reconnects on its own when it " +
+                        "finishes.",
+                    style = MaterialTheme.typography.bodySmall, color = Tape,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
         }
     } else {
@@ -953,6 +1041,16 @@ fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
                     onClick = { openTab(ctx, ui.baseUrl) },
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk)
                 ) { Text("Open in browser") }
+            }
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = { confirmNewPw = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Pad3),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.LockReset, null, tint = Vinyl)
+                Spacer(Modifier.width(8.dp))
+                Text("Reset password", color = Chalk)
             }
             Spacer(Modifier.height(14.dp))
             OutlinedButton(

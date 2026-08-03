@@ -651,6 +651,24 @@ def web():
                      httponly=True, samesite="lax", secure=True)
         return r
 
+    @api.post("/api/password")
+    async def change_password(request: Request):
+        """Sets a new password while signed in. Rotating the session secret
+        signs out every other device, which is the point of changing it."""
+        cfg = guard(request)
+        body = await request.json()
+        pw = (body.get("password") or "").strip()
+        if len(pw) < 4:
+            raise HTTPException(400, "Use at least 4 characters.")
+        cfg["password_hash"] = sha(pw)
+        cfg["session_secret"] = secrets.token_hex(16)
+        save_cfg(cfg)
+        tok = token_for(cfg)
+        r = JSONResponse({"ok": True, "token": tok})
+        r.set_cookie("arm_token", tok, max_age=60 * 60 * 24 * 365,
+                     httponly=True, samesite="lax", secure=True)
+        return r
+
     @api.get("/auth", response_class=HTMLResponse)
     async def auth_page(redirect: str = ""):
         """Sign-in page the Android app opens in a Custom Tab. On success it

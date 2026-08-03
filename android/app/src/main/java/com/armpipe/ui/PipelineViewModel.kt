@@ -62,6 +62,8 @@ data class UiState(
     /** True only when reconnecting to a backend somebody already claimed. */
     val needsPassword: Boolean = false,
     val backendPassword: String = "",
+    val resetting: Boolean = false,
+    val resetNote: String = "",
 ) {
     fun stage(id: String) = stages.first { it.id == id }
     val busy get() = stages.any { it.state == StageState.RUNNING }
@@ -177,6 +179,64 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
             say("Nothing answered at $url — check the workspace name.")
         } finally {
             _ui.update { it.copy(connecting = false) }
+        }
+    }
+
+    /** Makes a new password, applies it, and remembers it. Nothing to type. */
+    fun regeneratePassword() = viewModelScope.launch {
+        try {
+            val pw = newPassword()
+            val token = Api.changePassword(pw)
+            Prefs.setBackendPassword(ctx, pw)
+            Prefs.setConnection(ctx, _ui.value.baseUrl, token)
+            say("New password set and saved.")
+        } catch (e: Exception) {
+            say("Could not change the password: ${e.message}")
+        }
+    }
+
+    /**
+     * The locked-out path. The app cannot ask the backend to unlock itself, so
+     * it asks GitHub to run the reset workflow, waits for it, then reconnects.
+     */
+    fun resetPasswordViaGitHub(workspace: String) = viewModelScope.launch {
+        val st = _ui.value
+        if (st.ghRepo.isBlank() || st.ghToken.isBlank()) {
+            say("Enter your repository and GitHub token first.")
+            return@launch
+        }
+        _ui.update { it.copy(resetting = true, resetNote = "Asking GitHub to reset…") }
+        try {
+            com.armpipe.work.GitHubDeploy.dispatch(
+                st.ghRepo, st.ghToken, com.armpipe.work.GitHubDeploy.RESET_WORKFLOW)
+            var done = false
+            for (attempt in 0 until 60) {
+                delay(5000)
+                val run = runCatching {
+                    com.armpipe.work.GitHubDeploy.latestRun(
+                        st.ghRepo, st.ghToken,
+                        com.armpipe.work.GitHubDeploy.RESET_WORKFLOW)
+                }.getOrNull()
+                _ui.update {
+                    it.copy(resetNote = when {
+                        run == null -> "Waiting for the run to start…"
+                        run.status != "completed" -> "Resetting — ${run.status}"
+                        run.conclusion == "success" -> "Reset done. Reconnecting…"
+                        else -> "Reset failed: ${run.conclusion}"
+                    })
+                }
+                if (run?.status == "completed") { done = run.conclusion == "success"; break }
+            }
+            _ui.update { it.copy(resetting = false) }
+            if (done) {
+                Prefs.setBackendPassword(ctx, "")
+                connectTo(workspace.ifBlank { st.baseUrl })
+            }
+        } catch (e: Exception) {
+            _ui.update {
+                it.copy(resetting = false,
+                        resetNote = e.message ?: "GitHub refused the request.")
+            }
         }
     }
 

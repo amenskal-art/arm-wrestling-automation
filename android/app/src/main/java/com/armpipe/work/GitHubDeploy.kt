@@ -37,6 +37,8 @@ object GitHubDeploy {
 
     val REQUIRED_SECRETS = listOf("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET")
 
+    const val RESET_WORKFLOW = "reset-password.yml"
+
     private suspend fun call(req: Request): String =
         suspendCancellableCoroutine { cont ->
             client.newCall(req).enqueue(object : Callback {
