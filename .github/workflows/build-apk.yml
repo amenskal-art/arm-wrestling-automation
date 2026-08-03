@@ -34,8 +34,38 @@ jobs:
           gradle-version: "8.11.1"
 
       - name: Build the APK
+        id: build
         working-directory: android
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon 2>&1 | tee ../build.log
+
+      # Gradle buries the real cause under 80 lines of its own stack trace.
+      # Kotlin reports every problem on a line starting with "e:", so pull
+      # exactly those out and put them where they are easy to read and copy.
+      - name: Show the compile errors
+        if: failure()
+        run: |
+          echo "## Compile errors" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          if grep -q "^e: " build.log; then
+            grep "^e: " build.log | sed 's|file:///home/runner/work/[^/]*/[^/]*/||' \
+              | tee -a $GITHUB_STEP_SUMMARY
+          else
+            echo "No Kotlin errors found. Last 40 lines of the build:" \
+              | tee -a $GITHUB_STEP_SUMMARY
+            grep -v "^\s*at " build.log | tail -40 | tee -a $GITHUB_STEP_SUMMARY
+          fi
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo ""
+          echo "The block above is also at the top of this run's summary page."
+
+      - name: Keep the full log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
