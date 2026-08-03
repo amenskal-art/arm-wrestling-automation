@@ -55,6 +55,9 @@ data class UiState(
     val ghToken: String = "",
     val ghWorkflow: String = "deploy.yml",
     val fetchingUrl: Boolean = false,
+    /** True only when reconnecting to a backend somebody already claimed. */
+    val needsPassword: Boolean = false,
+    val backendPassword: String = "",
 ) {
     fun stage(id: String) = stages.first { it.id == id }
     val busy get() = stages.any { it.state == StageState.RUNNING }
@@ -93,6 +96,7 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                         connected = p.connected, baseUrl = p.baseUrl,
                         ghRepo = p.ghRepo, ghToken = p.ghToken,
                         ghWorkflow = p.ghWorkflow,
+                        backendPassword = p.backendPassword,
                     )
                 }
                 if (p.connected && !was) refresh()
@@ -105,19 +109,89 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
 
     /* ------------------------------------------------------------ connect */
 
-    fun connect(rawUrl: String, password: String) = viewModelScope.launch {
-        val url = normalise(rawUrl)
+    /**
+     * Everything the connection needs, from one box.
+     *
+     * Accepts a workspace name ("chris"), a host, or a full URL. Modal web
+     * endpoints are always <workspace>--<label>.modal.run, so the workspace
+     * name alone is enough to build the address.
+     */
+    fun resolveUrl(raw: String): String? {
+        val t = raw.trim().trimEnd('/')
+        if (t.isBlank()) return null
+        return when {
+            t.startsWith("http://") || t.startsWith("https://") -> t
+            t.contains(".modal.run") -> "https://$t"
+            t.contains('.') || t.contains(' ') || t.contains('/') -> null
+            else -> "https://$t--arm-pipeline.modal.run"
+        }
+    }
+
+    private fun newPassword(): String {
+        val r = java.security.SecureRandom()
+        val bytes = ByteArray(12).also { r.nextBytes(it) }
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    /** One tap. Finds the backend, claims it if new, signs in. */
+    fun connectTo(raw: String) = viewModelScope.launch {
+        val url = resolveUrl(raw)
+        if (url == null) {
+            say("Type your Modal workspace name, or paste the full URL.")
+            return@launch
+        }
+        _ui.update { it.copy(connecting = true, needsPassword = false) }
+        try {
+            Api.health(url)                     // fail fast if that is not it
+            Api.baseUrl = url
+            val st = Api.state(url)
+            val saved = _ui.value.backendPassword
+            when {
+                st.needsPassword -> {
+                    // Brand new backend: claim it with a generated password so
+                    // there is nothing to invent or remember.
+                    val pw = newPassword()
+                    val token = Api.login(pw)
+                    Prefs.setBackendPassword(ctx, pw)
+                    Prefs.setConnection(ctx, url, token)
+                    say("Connected.")
+                }
+                saved.isNotBlank() -> {
+                    val token = Api.login(saved)
+                    Prefs.setConnection(ctx, url, token)
+                    say("Connected.")
+                }
+                else -> {
+                    Prefs.setBaseUrl(ctx, url)
+                    _ui.update { it.copy(needsPassword = true) }
+                    say("This backend already has a password. Enter it once.")
+                }
+            }
+        } catch (e: ApiException) {
+            say(if (e.code == 401) "Wrong password." else e.message ?: "Could not connect.")
+        } catch (e: Exception) {
+            say("Nothing answered at $url — check the workspace name.")
+        } finally {
+            _ui.update { it.copy(connecting = false) }
+        }
+    }
+
+    /** Only used when rejoining a backend that already has a password. */
+    fun connectWithPassword(raw: String, password: String) = viewModelScope.launch {
+        val url = resolveUrl(raw) ?: return@launch
+        if (password.length < 4) { say("Enter the password you used before."); return@launch }
         _ui.update { it.copy(connecting = true) }
         try {
-            Api.health(url)                       // fail fast on a wrong URL
             Api.baseUrl = url
             val token = Api.login(password)
+            Prefs.setBackendPassword(ctx, password)
             Prefs.setConnection(ctx, url, token)
+            _ui.update { it.copy(needsPassword = false) }
             say("Connected.")
         } catch (e: ApiException) {
             say(if (e.code == 401) "Wrong password." else e.message ?: "Could not connect.")
         } catch (e: Exception) {
-            say("No backend at that address. Check the URL.")
+            say("Could not reach the backend.")
         } finally {
             _ui.update { it.copy(connecting = false) }
         }
@@ -130,7 +204,7 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun rememberUrl(rawUrl: String) = viewModelScope.launch {
-        Prefs.setBaseUrl(ctx, normalise(rawUrl))
+        resolveUrl(rawUrl)?.let { Prefs.setBaseUrl(ctx, it) }
     }
 
     fun saveGitHub(repo: String, token: String, workflow: String = "deploy.yml") =
@@ -159,16 +233,6 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Primary actions are never disabled; they explain what is missing. */
-    fun connectChecked(url: String, password: String) = viewModelScope.launch {
-        val u = normalise(url)
-        when {
-            u.isBlank() -> say("Add the backend address first, or fetch it from GitHub.")
-            !u.startsWith("http") -> say("That does not look like a web address.")
-            password.length < 4 -> say("Choose a password of at least 4 characters.")
-            else -> connect(u, password)
-        }
-    }
 
     fun disconnect() = viewModelScope.launch {
         pollers.values.forEach { it.cancel() }
@@ -177,16 +241,11 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { UiState(baseUrl = it.baseUrl) }
     }
 
-    private fun normalise(raw: String): String {
-        var u = raw.trim()
-        if (u.isEmpty()) return u
-        if (!u.startsWith("http")) u = "https://$u"
-        return u.trimEnd('/')
-    }
-
     /* ------------------------------------------------------------- config */
 
     fun refresh() = viewModelScope.launch {
+        // Nothing to reload before a connection exists - don't shout about it.
+        if (!_ui.value.connected) return@launch
         _ui.update { it.copy(loading = true) }
         try {
             val cfg = Api.config()
