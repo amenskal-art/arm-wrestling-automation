@@ -382,41 +382,113 @@ fun RunEverythingBar(ui: UiState, vm: PipelineViewModel) {
 @Composable
 fun KnowledgeScreen(ui: UiState, vm: PipelineViewModel) {
     val ctx = LocalContext.current
+    // Anything above this is refused by the paste box. A phone text field
+    // measures every character it holds, and a big file will kill the app.
+    val PASTE_LIMIT = 20_000
+    var draft by rememberSaveable { mutableStateOf("") }
+
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        runCatching {
-            ctx.contentResolver.openInputStream(uri)?.use {
-                vm.setKnowledge(it.readBytes().decodeToString())
-            }
-        }
-    }
+    ) { uri -> uri?.let { vm.importKnowledge(it, displayName(ctx, it)) } }
 
     Section(
         "Knowledge file",
-        "Every fact in the script is pulled from this text. The writing instructions " +
-            "themselves live in the Python on the server, so you only supply the material."
+        "Every fact in the script comes from this text. The writing instructions " +
+            "live in the Python on the server, so you only supply the material."
     ) {
-        Field("Paste your arm wrestling data, analyses and old scripts",
-            ui.knowledge, vm::setKnowledge, lines = 14)
-        Text(
-            "${ui.knowledge.length} characters" +
-                if (ui.knowledgeName.isNotBlank()) " · saved as ${ui.knowledgeName}" else "",
-            style = MaterialTheme.typography.bodySmall, color = Tape
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { vm.saveKnowledge() },
-                colors = ButtonDefaults.buttonColors(containerColor = Vinyl)
-            ) { Text("Save to server") }
-            OutlinedButton(
-                onClick = { picker.launch(arrayOf("text/plain", "*/*")) },
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk)
-            ) { Text("Import a .txt") }
+        if (ui.knowledgeChars > 0) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Pad3),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(ui.knowledgeName, style = MaterialTheme.typography.titleMedium,
+                        color = Chalk, maxLines = 1)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "%,d words · %,d characters".format(
+                            ui.knowledgeWords, ui.knowledgeChars),
+                        style = MaterialTheme.typography.bodySmall, color = Pin,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (ui.knowledgePreview.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text("Starts with", style = MaterialTheme.typography.labelSmall,
+                            color = Tape)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            ui.knowledgePreview.take(400) + "…",
+                            style = MaterialTheme.typography.bodySmall, color = Tape,
+                            maxLines = 6
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Stored on the server. It is not loaded into the app, which is why " +
+                    "a file this size opens instantly.",
+                style = MaterialTheme.typography.bodySmall, color = Tape
+            )
+        } else {
+            Text("No knowledge file yet.", style = MaterialTheme.typography.bodyMedium,
+                color = Tape)
         }
+
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = { picker.launch(arrayOf("text/plain", "*/*")) },
+            colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Icon(Icons.Filled.UploadFile, null)
+            Spacer(Modifier.width(8.dp))
+            Text(if (ui.knowledgeChars > 0) "Replace with a .txt file"
+                 else "Import a .txt file")
+        }
+        Text(
+            "The right way to load a big document — it goes straight to the server " +
+                "without passing through the app.",
+            style = MaterialTheme.typography.bodySmall, color = Tape,
+            modifier = Modifier.padding(top = 6.dp)
+        )
     }
+
+    HorizontalDivider(Modifier.padding(16.dp), color = Line)
+
+    Section("Add a passage", "For a few paragraphs. Appends, never replaces.") {
+        OutlinedTextField(
+            value = draft,
+            onValueChange = {
+                // Refuse an oversized paste rather than trying to render it.
+                if (it.length <= PASTE_LIMIT) draft = it
+                else vm.say("Too long to paste here — use Import a .txt file instead.")
+            },
+            label = { Text("Paste text") },
+            minLines = 6,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Ref, unfocusedBorderColor = Line,
+                focusedLabelColor = Ref, unfocusedLabelColor = Tape,
+                focusedTextColor = Chalk, unfocusedTextColor = Chalk,
+                cursorColor = Vinyl,
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${draft.length} / $PASTE_LIMIT characters",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (draft.length > PASTE_LIMIT * 9 / 10) Vinyl else Tape
+        )
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { vm.appendKnowledge(draft) { draft = "" } },
+            colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Add to the knowledge file") }
+    }
+    Spacer(Modifier.height(30.dp))
 }
 
 /* ================================================================= sources */
