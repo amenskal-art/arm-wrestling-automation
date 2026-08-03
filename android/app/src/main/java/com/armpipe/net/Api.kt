@@ -56,6 +56,15 @@ data class FileItem(
 @Serializable
 data class PasteResp(val text: String = "", val chars: Int = 0, val name: String = "")
 
+/** Stats plus a short preview. Never the whole file - it can be megabytes. */
+@Serializable
+data class KnowledgeInfo(
+    val name: String = "",
+    val chars: Int = 0,
+    val words: Int = 0,
+    val preview: String = "",
+)
+
 @Serializable
 data class UploadResp(
     val ok: Boolean = false,
@@ -184,13 +193,13 @@ object Api {
     suspend fun saveApiKey(key: String) =
         saveConfig(buildJsonObject { put("api_key", key) })
 
-    suspend fun readKnowledge(): PasteResp = json.decodeFromString(get("/api/paste"))
+    suspend fun knowledgeInfo(): KnowledgeInfo =
+        json.decodeFromString(get("/api/knowledge"))
 
-    suspend fun writeKnowledge(text: String): PasteResp = json.decodeFromString(
-        post("/api/paste", buildJsonObject {
-            put("kind", "reference"); put("text", text)
-        })
-    )
+    suspend fun appendKnowledge(text: String): JsonObject =
+        json.parseToJsonElement(
+            post("/api/knowledge/append", buildJsonObject { put("text", text) })
+        ).jsonObject
 
     /** Streams a picked file (voice clip, cookies.txt) straight to the volume. */
     suspend fun upload(ctx: Context, kind: String, uri: Uri, filename: String): UploadResp {
