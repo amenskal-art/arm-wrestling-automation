@@ -815,113 +815,78 @@ fun DeployScreen(ui: UiState, vm: PipelineViewModel) {
 @Composable
 fun ConnectionScreen(ui: UiState, vm: PipelineViewModel) {
     val ctx = LocalContext.current
-    var repo by rememberSaveable(ui.ghRepo) { mutableStateOf(ui.ghRepo) }
-    var ghToken by rememberSaveable(ui.ghToken) { mutableStateOf(ui.ghToken) }
-    var url by rememberSaveable(ui.baseUrl) { mutableStateOf(ui.baseUrl) }
+    var input by rememberSaveable(ui.baseUrl) { mutableStateOf(ui.baseUrl) }
     var password by rememberSaveable { mutableStateOf("") }
+    var showPw by remember { mutableStateOf(false) }
 
     if (!ui.connected) {
-        Section("Setup", "Three steps, once. Each one turns on the next.") {
-            listOf(
-                "Deploy the backend from GitHub" to ui.ghRepo.isNotBlank(),
-                "Fetch its address" to ui.baseUrl.isNotBlank(),
-                "Choose a password" to false,
-            ).forEachIndexed { i, (label, done) ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "0${i + 1}", fontFamily = FontFamily.Monospace, fontSize = 11.sp,
-                        color = if (done) Pin else Tape
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(label, style = MaterialTheme.typography.bodyMedium,
-                        color = if (done) Pin else Chalk)
-                }
+        Section(
+            "Connect to Modal",
+            "Type your Modal workspace name — the one in your Modal dashboard URL. " +
+                "That is all this needs."
+        ) {
+            Field("Workspace name", input, { input = it }, placeholder = "e.g. yourname")
+            vm.resolveUrl(input)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = Tape,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(bottom = 10.dp))
+            }
+            Button(
+                onClick = { vm.connectTo(input) },
+                colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
+                modifier = Modifier.fillMaxWidth().height(50.dp)
+            ) {
+                Text(if (ui.connecting) "Connecting…" else "Connect", fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold)
+            }
+            Text(
+                "Already pasted a full https://…modal.run address? That works too.",
+                style = MaterialTheme.typography.bodySmall, color = Tape,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+
+        // Only ever shown when rejoining a backend someone already claimed.
+        if (ui.needsPassword) {
+            Section("One more thing", "This backend was set up before. Enter its password once.") {
+                Field("Password", password, { password = it }, password = true)
+                Button(
+                    onClick = { vm.connectWithPassword(input, password) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) { Text("Sign in") }
             }
         }
-    }
-
-    Section(
-        "Your repository",
-        "Used to find the backend address and to deploy. Saved as you type."
-    ) {
-        Field("Repository", repo, {
-            repo = it; vm.saveGitHub(it, ghToken, ui.ghWorkflow)
-        }, placeholder = "your-name/arm-pipeline")
-        Field("GitHub token", ghToken, {
-            ghToken = it; vm.saveGitHub(repo, it, ui.ghWorkflow)
-        }, password = true, placeholder = "ghp_…")
-        OutlinedButton(
-            onClick = { openTab(ctx, GitHubDeploy.TOKEN_PAGE) },
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.OpenInBrowser, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Create a GitHub token")
-        }
-    }
-
-    Section(
-        "Backend address",
-        "The deploy workflow records this in your repo, so you should not have " +
-            "to type it."
-    ) {
-        Field("Modal URL", url, { url = it }, placeholder = "https://…modal.run")
-        OutlinedButton(
-            onClick = { vm.fetchBackendUrl() },
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.CloudDownload, null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (ui.fetchingUrl) "Looking…" else "Get the address from GitHub")
-        }
-    }
-
-    Section("Password", "You choose it on the first connect. It locks the backend.") {
-        Field("Password", password, { password = it }, password = true)
-        Button(
-            // Never disabled: tapping tells you exactly what is missing.
-            onClick = { vm.connectChecked(url, password) },
-            colors = ButtonDefaults.buttonColors(containerColor = Vinyl),
-            modifier = Modifier.fillMaxWidth().height(48.dp)
-        ) { Text(if (ui.connecting) "Connecting…" else "Connect") }
-
-        Spacer(Modifier.height(10.dp))
-        OutlinedButton(
-            onClick = {
-                val u = url.trim()
-                if (!u.startsWith("http")) {
-                    vm.say("Add the address above first, or fetch it from GitHub.")
-                } else {
-                    vm.rememberUrl(u)
-                    openTab(ctx, u.trimEnd('/') + "/auth?redirect=armpipe%3A%2F%2Fauth")
-                }
-            },
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.OpenInBrowser, null)
-            Spacer(Modifier.width(8.dp))
-            Text("Sign in with the browser instead")
-        }
-        Text(
-            "The browser signs in and hands the session straight back to this app.",
-            style = MaterialTheme.typography.bodySmall, color = Tape,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-
-    if (ui.connected) {
-        HorizontalDivider(Modifier.padding(16.dp), color = Line)
+    } else {
         Section("Connected", ui.baseUrl) {
+            Text(
+                "The backend password was generated for you. You only need it to " +
+                    "open the same pipeline in a browser.",
+                style = MaterialTheme.typography.bodySmall, color = Tape
+            )
+            Spacer(Modifier.height(10.dp))
+            if (showPw) {
+                Text(
+                    ui.backendPassword.ifBlank { "(set on another device)" },
+                    fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = Pin
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { showPw = !showPw },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk)
+                ) { Text(if (showPw) "Hide password" else "Show password") }
+                OutlinedButton(
+                    onClick = { openTab(ctx, ui.baseUrl) },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Chalk)
+                ) { Text("Open in browser") }
+            }
+            Spacer(Modifier.height(14.dp))
             OutlinedButton(
                 onClick = { vm.disconnect() },
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Vinyl)
-            ) { Text("Sign out of this phone") }
+            ) { Text("Disconnect") }
         }
     }
 
