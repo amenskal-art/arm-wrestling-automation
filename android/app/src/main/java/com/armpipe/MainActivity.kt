@@ -36,8 +36,8 @@ enum class Dest(val label: String, val icon: ImageVector, val caption: String) {
     SOURCES("Sources", Icons.Filled.Link, "Video links and the voice clip"),
     MODELS("Models", Icons.Filled.Tune, "Which AI does which job"),
     FILES("Files", Icons.Filled.Download, "Download the finished video"),
-    DEPLOY("Deploy", Icons.Filled.CloudUpload, "Push the backend to Modal"),
-    CONNECTION("Connection", Icons.Filled.Key, "Backend address and sign-in"),
+    DEPLOY("Deploy", Icons.Filled.CloudUpload, "Optional — redeploy from GitHub"),
+    CONNECTION("Connection", Icons.Filled.Key, "Your Modal workspace"),
 }
 
 class MainActivity : ComponentActivity() {
@@ -109,8 +109,10 @@ class MainActivity : ComponentActivity() {
                                     if (ui.loading) CircularProgressIndicator(
                                         Modifier.padding(end = 16.dp).size(20.dp),
                                         strokeWidth = 2.dp, color = Ref
-                                    ) else IconButton(onClick = { vm.refresh() }) {
-                                        Icon(Icons.Filled.Refresh, "Reload from the server")
+                                    ) else if (ui.connected) {
+                                        IconButton(onClick = { vm.refresh() }) {
+                                            Icon(Icons.Filled.Refresh, "Reload from the server")
+                                        }
                                     }
                                 },
                                 colors = TopAppBarDefaults.topAppBarColors(
