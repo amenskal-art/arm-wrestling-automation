@@ -1,0 +1,45 @@
+name: Apply update
+
+# Upload apply_update.py to the repo root and this unpacks it: it writes every
+# file it carries into place and commits them. One upload instead of ten edits.
+# Runs by itself when apply_update.py changes, or from Actions -> Run workflow.
+on:
+  push:
+    paths: ["apply_update.py"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Unpack the files
+        run: |
+          python apply_update.py | tee apply.log
+          echo "## Files applied" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat apply.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit them
+        run: |
+          rm -f apply.log
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Nothing changed — the repo was already up to date."
+          else
+            git commit -m "Apply update from apply_update.py"
+            git push
+            echo "Committed. Now run: Deploy to Modal, then Build Android APK." \
+              >> $GITHUB_STEP_SUMMARY
+          fi
