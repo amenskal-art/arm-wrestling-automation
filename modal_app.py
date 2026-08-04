@@ -84,10 +84,14 @@ tts_image = (
     .add_local_python_source("core")
 )
 
+# The web container serves the analysis plan, which means it reads the real
+# prompt, schema and cache paths out of maker_core. Without the source and
+# pydantic it cannot import them, and every request to those endpoints fails.
 web_image = (
-    base_image.pip_install("fastapi[standard]")
+    base_image.pip_install("fastapi[standard]", "pydantic>=2.0")
     .env({"ARM_DATA": "/data"})
     .add_local_dir("web", remote_path="/assets")
+    .add_local_python_source("core")
 )
 
 GPU_TYPE = "A10G"          # bump to "L40S" or "A100" for faster long scripts
@@ -810,7 +814,11 @@ def web():
     @api.get("/api/analysis/plan")
     async def analysis_plan(request: Request):
         cfg = guard(request)
-        from core import maker_core as M
+        try:
+            from core import maker_core as M
+        except Exception as e:
+            raise HTTPException(
+                500, f"Backend cannot load the pipeline code: {e}")
 
         links = [u.strip() for u in cfg.get("links", []) if u.strip()]
         todo = []
@@ -869,7 +877,11 @@ def web():
     async def analysis_result(request: Request):
         """Stores one analysed video, in the exact shape analyze_video writes."""
         guard(request)
-        from core import maker_core as M
+        try:
+            from core import maker_core as M
+        except Exception as e:
+            raise HTTPException(
+                500, f"Backend cannot load the pipeline code: {e}")
 
         body = await request.json()
         url = (body.get("url") or "").strip()
