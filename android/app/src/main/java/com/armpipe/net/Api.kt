@@ -140,10 +140,17 @@ object Api {
                 response.use {
                     val body = it.body?.string().orEmpty()
                     if (!it.isSuccessful) {
+                        // response.message is EMPTY over HTTP/2 - the protocol
+                        // dropped status reason phrases - and Modal serves h2.
+                        // Falling back to it produced errors that rendered as a
+                        // bare "Stopped:" with nothing after them, hiding the
+                        // real cause. Always carry the status code.
                         val detail = runCatching {
                             json.parseToJsonElement(body).jsonObject["detail"]
                                 ?.jsonPrimitive?.content
-                        }.getOrNull() ?: it.message
+                        }.getOrNull()?.takeIf { d -> d.isNotBlank() }
+                            ?: it.message.takeIf { m -> m.isNotBlank() }
+                            ?: "HTTP ${it.code} from ${request.url.encodedPath}"
                         cont.resumeWithException(ApiException(it.code, detail))
                     } else cont.resume(body)
                 }

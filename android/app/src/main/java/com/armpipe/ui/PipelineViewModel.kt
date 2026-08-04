@@ -283,7 +283,18 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         try {
-            val plan = Api.analysisPlan()
+            val plan = try {
+                Api.analysisPlan()
+            } catch (e: ApiException) {
+                if (e.code == 404) {
+                    note("This backend does not have the phone-analysis endpoints " +
+                         "yet. Run \"Deploy to Modal\" in GitHub Actions, then try " +
+                         "again.")
+                    say("Backend is out of date — redeploy it.")
+                    return@launch
+                }
+                throw e
+            }
             if (plan.api_key.isBlank()) {
                 say("Save your Gemini key in Sources first."); return@launch
             }
@@ -342,8 +353,10 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                  "Modal now has every timestamp it needs.")
             say("Analysis done on this phone. Run the cut next.")
         } catch (e: Exception) {
-            note("Stopped: ${e.message}")
-            say("Analysis stopped: ${e.message}")
+            val why = e.message?.takeIf { m -> m.isNotBlank() }
+                ?: e::class.simpleName ?: "unknown error"
+            note("Stopped: $why")
+            say("Analysis stopped: $why")
         } finally {
             _ui.update { it.copy(localAnalysing = false) }
         }
