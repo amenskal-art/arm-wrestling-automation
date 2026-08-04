@@ -9,12 +9,17 @@ import androidx.lifecycle.viewModelScope
 import com.armpipe.data.Prefs
 import com.armpipe.net.*
 import com.armpipe.work.JobService
-import com.armpipe.work.JobTracker
+import com.armpipe.work.JobRepo
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
@@ -64,6 +69,11 @@ data class UiState(
     val backendPassword: String = "",
     val resetting: Boolean = false,
     val resetNote: String = "",
+    // AI 2 running on the handset instead of on a paid container.
+    val localAnalysing: Boolean = false,
+    val localDone: Int = 0,
+    val localTotal: Int = 0,
+    val localLog: List<String> = emptyList(),
 ) {
     fun stage(id: String) = stages.first { it.id == id }
     val busy get() = stages.any { it.state == StageState.RUNNING }
@@ -88,10 +98,11 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    private val pollers = mutableMapOf<String, Job>()
     private val ctx: Context get() = getApplication()
 
     init {
+        observeJob()
+        rejoinRunningJob()
         viewModelScope.launch {
             Prefs.flow(ctx).collect { p ->
                 Api.baseUrl = p.baseUrl
@@ -108,6 +119,19 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                 if (p.connected && !was) refresh()
             }
         }
+    }
+
+    /**
+     * If a job was running when the app was last closed, pick it back up.
+     * The work never stopped — it runs on Modal — so this only restores the view.
+     */
+    private fun rejoinRunningJob() = viewModelScope.launch {
+        val p = Prefs.flow(ctx).first()
+        if (p.activeJob.isBlank()) return@launch
+        JobRepo.state.value = JobRepo.Snapshot(
+            jobId = p.activeJob, requested = p.activeStage, status = "running")
+        JobService.start(ctx)
+        say("Rejoined the run already in progress.")
     }
 
     fun dismissMessage() = _ui.update { it.copy(message = null) }
@@ -240,6 +264,91 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Runs AI 2 here on the phone.
+     *
+     * Gemini fetches each YouTube video itself, so this sends a few kilobytes
+     * per video and then waits. Waiting is free on a handset and billed by the
+     * second on a container, so the whole analysis phase costs nothing. Results
+     * go straight into the same cache the cut stage reads, which then has no
+     * Gemini work left to do.
+     */
+    fun analyseOnThisPhone() = viewModelScope.launch {
+        if (_ui.value.localAnalysing) return@launch
+        _ui.update { it.copy(localAnalysing = true, localLog = emptyList(),
+                             localDone = 0, localTotal = 0) }
+
+        fun note(m: String) = _ui.update {
+            it.copy(localLog = (it.localLog + m).takeLast(300))
+        }
+
+        try {
+            val plan = Api.analysisPlan()
+            if (plan.api_key.isBlank()) {
+                say("Save your Gemini key in Sources first."); return@launch
+            }
+            _ui.update { it.copy(localTotal = plan.todo.size) }
+            note("${plan.total} link(s): ${plan.cached} cached, " +
+                 "${plan.todo.size} to analyse here.")
+            if (plan.todo.isEmpty()) {
+                note("Nothing to do — every video is already analysed.")
+                say("All videos already analysed."); return@launch
+            }
+            note("Model ${plan.model}, one start every " +
+                 "${plan.min_interval_ms / 1000}s.")
+
+            var ok = 0
+            var failed = 0
+            val started = System.currentTimeMillis()
+
+            // Several analyses run at once; only their STARTS are paced, which
+            // is what the per-minute limit actually counts.
+            val gate = kotlinx.coroutines.sync.Mutex()
+            var lastStart = 0L
+
+            coroutineScope {
+                val jobs = plan.todo.map { task ->
+                    async(kotlinx.coroutines.Dispatchers.IO) {
+                        gate.withLock {
+                            val since = System.currentTimeMillis() - lastStart
+                            val wait = plan.min_interval_ms - since
+                            if (lastStart != 0L && wait > 0) delay(wait)
+                            lastStart = System.currentTimeMillis()
+                        }
+                        try {
+                            if (task.uri.isBlank())
+                                throw IllegalStateException("no video id in the link")
+                            val scenes = Gemini.analyseVideo(plan, task)
+                            Api.postAnalysis(task.url, task.key, scenes)
+                            synchronized(this@PipelineViewModel) { ok++ }
+                            note("  ok  ${scenes.size} scenes — ${task.url.takeLast(40)}")
+                        } catch (e: Gemini.QuotaExhausted) {
+                            synchronized(this@PipelineViewModel) { failed++ }
+                            note("  quota reached — stopping. ${e.message?.take(90)}")
+                            throw e
+                        } catch (e: Exception) {
+                            synchronized(this@PipelineViewModel) { failed++ }
+                            note("  x  ${task.url.takeLast(40)} -> ${e.message?.take(90)}")
+                        } finally {
+                            _ui.update { it.copy(localDone = it.localDone + 1) }
+                        }
+                    }
+                }
+                runCatching { jobs.awaitAll() }
+            }
+
+            val secs = (System.currentTimeMillis() - started) / 1000
+            note("Analysed $ok, failed $failed, in ${secs}s. " +
+                 "Modal now has every timestamp it needs.")
+            say("Analysis done on this phone. Run the cut next.")
+        } catch (e: Exception) {
+            note("Stopped: ${e.message}")
+            say("Analysis stopped: ${e.message}")
+        } finally {
+            _ui.update { it.copy(localAnalysing = false) }
+        }
+    }
+
     /** Only used when rejoining a backend that already has a password. */
     fun connectWithPassword(raw: String, password: String) = viewModelScope.launch {
         val url = resolveUrl(raw) ?: return@launch
@@ -299,8 +408,6 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
 
 
     fun disconnect() = viewModelScope.launch {
-        pollers.values.forEach { it.cancel() }
-        pollers.clear()
         Prefs.disconnect(ctx)
         _ui.update { UiState(baseUrl = it.baseUrl) }
     }
@@ -446,8 +553,9 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                             log = emptyList(), jobId = jobId, note = "")
                 }
             }
-            JobService.start(ctx)
-            watch(jobId, uiStage, stage)
+            // The service owns the watching from here. It keeps polling with
+            // the app closed, and survives the process being killed.
+            JobRepo.begin(ctx, jobId, stage)
         } catch (e: Exception) {
             say("Could not start: ${e.message}")
         }
@@ -461,8 +569,6 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
         val job = _ui.value.activeJobId ?: return@launch
         runCatching { Api.cancel(job) }
             .onFailure { say("Could not reach the server to stop it.") }
-        pollers.values.forEach { it.cancel() }
-        pollers.clear()
         _ui.update { st ->
             st.copy(
                 runningAll = false, activeJobId = null,
@@ -473,96 +579,70 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                 }
             )
         }
+        Prefs.clearActiveJob(ctx)
         JobService.stop(ctx)
+        JobRepo.state.value = JobRepo.Snapshot()
         say("Stopped.")
     }
 
     fun cancel(stageId: String) = stopEverything()
 
-    private fun watch(jobId: String, uiStage: String, requested: String) {
-        pollers.remove(uiStage)?.cancel()
-        pollers[uiStage] = viewModelScope.launch {
-            var since = 0
-            while (true) {
-                delay(1500)
-                val j = runCatching { Api.job(jobId, since) }.getOrNull() ?: continue
-                since = j.next
-                // During a full run the server reports which stage it reached;
-                // mark the ones behind it done and move the spotlight forward.
-                val target = if (requested == "all")
-                    (j.phase?.takeIf { it in STAGE_ORDER } ?: "script") else uiStage
-                if (requested == "all") advanceTo(target)
-                updateStage(target) { s ->
-                    s.copy(
-                        progress = j.progress ?: s.progress,
-                        log = (s.log + j.lines).takeLast(400),
-                    )
-                }
-                syncTracker()
-                when (j.status) {
-                    "done" -> {
-                        val titles = j.result?.get("titles")?.jsonArray
-                            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                        if (requested == "titles" && titles != null) {
-                            _ui.update {
-                                it.copy(suggestions = titles,
-                                        titleText = titles.firstOrNull() ?: it.titleText)
-                            }
-                            updateStage(target) { it.copy(state = StageState.IDLE) }
-                            _ui.update { it.copy(activeJobId = null) }
-                            say("Pick a topic, then run the stage.")
-                        } else if (requested == "all") {
-                            _ui.update { st ->
-                                st.copy(
-                                    runningAll = false, activeJobId = null,
-                                    stages = st.stages.map {
-                                        it.copy(state = StageState.DONE, progress = 1f)
-                                    }
-                                )
-                            }
-                            say("All four stages finished. The video is in Files.")
-                            loadFiles()
-                        } else {
-                            updateStage(target) {
+    /**
+     * Mirrors the service's snapshot onto the stage cards.
+     *
+     * Collected for the lifetime of the ViewModel, so reopening the app after
+     * it was swiped away rebuilds the whole picture — including the log, which
+     * the service replays from the server on attach.
+     */
+    private fun observeJob() = viewModelScope.launch {
+        JobRepo.state.collect { snap ->
+            val jobId = snap.jobId ?: return@collect
+            val requested = snap.requested
+            val target = if (requested == "all")
+                (snap.phase?.takeIf { it in STAGE_ORDER } ?: "script")
+            else if (requested in STAGE_ORDER) requested else "script"
+
+            if (requested == "all") advanceTo(target)
+
+            updateStage(target) { st ->
+                st.copy(
+                    state = if (snap.running) StageState.RUNNING else st.state,
+                    progress = snap.progress ?: st.progress,
+                    log = snap.lines,
+                    jobId = jobId,
+                )
+            }
+            _ui.update {
+                it.copy(
+                    activeJobId = if (snap.running) jobId else null,
+                    runningAll = snap.running && requested == "all",
+                )
+            }
+
+            when (snap.status) {
+                "done" -> {
+                    if (requested == "all") {
+                        _ui.update { st ->
+                            st.copy(stages = st.stages.map {
                                 it.copy(state = StageState.DONE, progress = 1f)
-                            }
-                            _ui.update { it.copy(activeJobId = null) }
-                            say("Finished. The file is in Files.")
-                            loadFiles()
+                            })
                         }
-                        finishJob(uiStage); return@launch
-                    }
-                    "failed", "cancelled" -> {
-                        val stopped = j.status == "cancelled"
+                    } else {
                         updateStage(target) {
-                            it.copy(
-                                state = if (stopped) StageState.IDLE else StageState.FAILED,
-                                note = if (stopped) "stopped"
-                                       else j.error?.take(120).orEmpty()
-                            )
+                            it.copy(state = StageState.DONE, progress = 1f)
                         }
-                        _ui.update { it.copy(runningAll = false, activeJobId = null) }
-                        if (!stopped) say(j.error?.take(140) ?: "The stage stopped.")
-                        finishJob(uiStage); return@launch
                     }
+                    loadFiles()
+                }
+                "failed" -> updateStage(target) {
+                    it.copy(state = StageState.FAILED,
+                            note = snap.error?.take(120).orEmpty())
+                }
+                "cancelled" -> updateStage(target) {
+                    it.copy(state = StageState.IDLE, note = "stopped")
                 }
             }
         }
-    }
-
-    private fun finishJob(stageId: String) {
-        pollers.remove(stageId)
-        syncTracker()
-        if (pollers.isEmpty()) JobService.stop(ctx)
-    }
-
-    private fun syncTracker() {
-        val running = _ui.value.stages.filter { it.state == StageState.RUNNING }
-        JobTracker.update(
-            label = running.joinToString(", ") { it.title }.ifBlank { "Working" },
-            progress = running.firstOrNull()?.progress,
-            active = running.isNotEmpty(),
-        )
     }
 
     /** Everything before the live phase is finished; the live one is working. */

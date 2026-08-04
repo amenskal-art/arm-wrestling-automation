@@ -184,6 +184,7 @@ fun PipelineScreen(ui: UiState, vm: PipelineViewModel) {
     )
 
     Column(Modifier.padding(bottom = 8.dp)) {
+        LocalAnalysisCard(ui, vm)
         if (ui.runningAll) {
             Text(
                 "Running all four stages. You do not need to do anything else.",
@@ -195,6 +196,79 @@ fun PipelineScreen(ui: UiState, vm: PipelineViewModel) {
             StageCard(stage, ui, vm) { confirmStop = true }
         }
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/**
+ * AI 2 on the handset. Gemini streams each YouTube video itself, so this sends
+ * a few kilobytes and then waits — free here, billed per second on a container.
+ */
+@Composable
+private fun LocalAnalysisCard(ui: UiState, vm: PipelineViewModel) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Pad2),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            Box(Modifier.width(3.dp).fillMaxHeight()
+                .background(if (ui.localAnalysing) Ref else Line))
+            Column(Modifier.padding(15.dp)) {
+                Text("OPTIONAL", style = MaterialTheme.typography.labelSmall,
+                    color = Tape, fontFamily = FontFamily.Monospace)
+                Text("Analyse on this phone", color = Chalk,
+                    style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Runs the video analysis here instead of on Modal. Gemini " +
+                        "fetches each video itself, so your phone only sends a " +
+                        "request and waits — which costs nothing.",
+                    style = MaterialTheme.typography.bodySmall, color = Tape
+                )
+                if (ui.localTotal > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(
+                        progress = { ui.localDone.toFloat() / ui.localTotal },
+                        color = Ref, trackColor = Line,
+                        modifier = Modifier.fillMaxWidth().height(4.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("${ui.localDone} / ${ui.localTotal} videos",
+                        style = MaterialTheme.typography.bodySmall, color = Tape)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = { open = true; vm.analyseOnThisPhone() },
+                        enabled = !ui.localAnalysing && !ui.busy,
+                        colors = ButtonDefaults.buttonColors(containerColor = Pad3)
+                    ) {
+                        Icon(Icons.Filled.PhoneAndroid, null, tint = Ref)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (ui.localAnalysing) "Analysing…" else "Analyse here",
+                            color = Chalk)
+                    }
+                    TextButton(onClick = { open = !open }) {
+                        Text(if (open) "Hide log" else "Log", color = Tape)
+                    }
+                }
+                AnimatedVisibility(open || ui.localAnalysing) {
+                    Column {
+                        Spacer(Modifier.height(8.dp))
+                        LogBox(ui.localLog.ifEmpty { listOf("Not started.") })
+                    }
+                }
+                Text(
+                    "Keep the app open while this runs. Everything it finds is " +
+                        "saved on Modal, so a interruption only costs the videos " +
+                        "still in flight.",
+                    style = MaterialTheme.typography.bodySmall, color = Tape,
+                    modifier = Modifier.padding(top = 10.dp)
+                )
+            }
+        }
     }
 }
 

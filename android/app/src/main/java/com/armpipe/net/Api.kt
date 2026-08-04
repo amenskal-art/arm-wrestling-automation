@@ -202,6 +202,17 @@ object Api {
     suspend fun saveApiKey(key: String) =
         saveConfig(buildJsonObject { put("api_key", key) })
 
+    /** What the phone still has to analyse, plus the prompt and schema to do it. */
+    suspend fun analysisPlan(): AnalysisPlan =
+        json.decodeFromString(get("/api/analysis/plan"))
+
+    /** Files one analysed video into the same cache the pipeline reads. */
+    suspend fun postAnalysis(url: String, key: String, scenes: JsonArray) {
+        post("/api/analysis/result", buildJsonObject {
+            put("url", url); put("key", key); put("scenes", scenes)
+        })
+    }
+
     suspend fun knowledgeInfo(): KnowledgeInfo =
         json.decodeFromString(get("/api/knowledge"))
 

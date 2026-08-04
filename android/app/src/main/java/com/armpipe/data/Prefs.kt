@@ -19,6 +19,9 @@ object Prefs {
     private val GH_WORKFLOW = stringPreferencesKey("gh_workflow")
     private val LAST_TITLE = stringPreferencesKey("last_title")
     private val BACKEND_PW = stringPreferencesKey("backend_pw")
+    // Which job is in flight, so a reopened app can rejoin it.
+    private val ACTIVE_JOB = stringPreferencesKey("active_job")
+    private val ACTIVE_STAGE = stringPreferencesKey("active_stage")
 
     data class State(
         val baseUrl: String = "",
@@ -29,6 +32,8 @@ object Prefs {
         val lastTitle: String = "",
         /** Generated on first connect. You never have to type or invent one. */
         val backendPassword: String = "",
+        val activeJob: String = "",
+        val activeStage: String = "",
     ) {
         val connected get() = baseUrl.isNotBlank() && token.isNotBlank()
     }
@@ -42,6 +47,8 @@ object Prefs {
             ghWorkflow = p[GH_WORKFLOW] ?: "deploy.yml",
             lastTitle = p[LAST_TITLE].orEmpty(),
             backendPassword = p[BACKEND_PW].orEmpty(),
+            activeJob = p[ACTIVE_JOB].orEmpty(),
+            activeStage = p[ACTIVE_STAGE].orEmpty(),
         )
     }
 
@@ -51,6 +58,14 @@ object Prefs {
 
     suspend fun setBackendPassword(ctx: Context, pw: String) {
         ctx.store.edit { it[BACKEND_PW] = pw }
+    }
+
+    suspend fun setActiveJob(ctx: Context, jobId: String, stage: String) {
+        ctx.store.edit { it[ACTIVE_JOB] = jobId; it[ACTIVE_STAGE] = stage }
+    }
+
+    suspend fun clearActiveJob(ctx: Context) {
+        ctx.store.edit { it.remove(ACTIVE_JOB); it.remove(ACTIVE_STAGE) }
     }
 
     suspend fun setToken(ctx: Context, token: String) {

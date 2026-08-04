@@ -32,6 +32,7 @@ import re
 import sys
 import json
 import time
+import threading as _threading
 import queue
 import hashlib
 import shutil
@@ -195,12 +196,25 @@ Irakli Zirakashvili, and others).
 # ----------------------------------------------------------------------------
 # Gemini helpers
 # ----------------------------------------------------------------------------
-def make_client(api_key: str):
+def make_client(api_key: str, timeout_ms: int = 600_000):
+    """CLOUD ADDITION: a per-request timeout.
+
+    Without one, a stalled Gemini call blocks forever. On a laptop you notice
+    and press Ctrl-C; in a cloud container it silently holds the machine —
+    and the bill — until the job times out hours later. Ten minutes is far
+    longer than any real video analysis, so this only fires on a genuine hang,
+    and gen_json's retry loop then gets its turn.
+    """
     try:
         from google import genai  # google-genai SDK
     except ImportError:
         raise RuntimeError("Missing SDK. Run:  pip install google-genai")
-    return genai.Client(api_key=api_key)
+    try:
+        from google.genai import types as _t
+        return genai.Client(api_key=api_key,
+                            http_options=_t.HttpOptions(timeout=timeout_ms))
+    except Exception:
+        return genai.Client(api_key=api_key)
 
 
 # ---- Pydantic response schemas: force the model to emit VALID structured ----
@@ -265,14 +279,25 @@ _MODEL_INTERVAL = {
 }
 
 
+_THROTTLE_LOCK = _threading.Lock()
+
+
 def _throttle(model: str, log):
+    """Spaces out request STARTS.
+
+    The per-minute limit counts how often a call may begin, not how many may
+    be in flight, so several long analyses can legally overlap. Holding the
+    lock across the sleep is what keeps the spacing exact when threads call
+    this at once.
+    """
     interval = _MODEL_INTERVAL.get(model, 13.0)
-    last = _LAST_CALL.get(model, 0.0)
-    wait = interval - (time.time() - last)
-    if wait > 0.5:
-        log(f"    (pacing {wait:.0f}s to respect the {model} per-minute limit)")
-        time.sleep(max(wait, 0))
-    _LAST_CALL[model] = time.time()
+    with _THROTTLE_LOCK:
+        last = _LAST_CALL.get(model, 0.0)
+        wait = interval - (time.time() - last)
+        if wait > 0.5:
+            log(f"    (pacing {wait:.0f}s to respect the {model} per-minute limit)")
+            time.sleep(max(wait, 0))
+        _LAST_CALL[model] = time.time()
 
 
 def _parse_retry_delay(msg: str) -> float | None:
