@@ -13,6 +13,7 @@ import com.armpipe.work.JobRepo
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.async
@@ -305,42 +306,97 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
                 note("Nothing to do — every video is already analysed.")
                 say("All videos already analysed."); return@launch
             }
-            note("Model ${plan.model}, one start every " +
-                 "${plan.min_interval_ms / 1000}s.")
 
-            var ok = 0
-            var failed = 0
-            val started = System.currentTimeMillis()
+            // A video is huge in tokens, and the free tier caps INPUT TOKENS per
+            // minute as well as requests. Overlapping many analyses blows the
+            // token budget even when the request spacing is perfectly legal, so
+            // only a couple run at a time.
+            val lanes = plan.max_concurrent.coerceIn(1, 8)
+            note("Model ${plan.model}: one start every " +
+                 "${plan.min_interval_ms / 1000}s, $lanes at a time.")
 
-            // Several analyses run at once; only their STARTS are paced, which
-            // is what the per-minute limit actually counts.
             val gate = kotlinx.coroutines.sync.Mutex()
             var lastStart = 0L
+            var pausedUntil = 0L          // set when Google tells us to wait
+            val lanesSem = kotlinx.coroutines.sync.Semaphore(lanes)
+            var ok = 0; var failed = 0; var retried = 0
+            val started = System.currentTimeMillis()
+
+            /** Waits for a legal moment to begin, honouring any quota pause. */
+            suspend fun awaitSlot() {
+                while (true) {
+                    val waitFor = gate.withLock {
+                        val now = System.currentTimeMillis()
+                        val pause = pausedUntil - now
+                        if (pause > 0) return@withLock pause
+                        val since = now - lastStart
+                        val gap = plan.min_interval_ms - since
+                        if (lastStart != 0L && gap > 0) return@withLock gap
+                        lastStart = System.currentTimeMillis()
+                        0L
+                    }
+                    if (waitFor <= 0L) return
+                    delay(waitFor)
+                }
+            }
 
             coroutineScope {
                 val jobs = plan.todo.map { task ->
                     async(kotlinx.coroutines.Dispatchers.IO) {
-                        gate.withLock {
-                            val since = System.currentTimeMillis() - lastStart
-                            val wait = plan.min_interval_ms - since
-                            if (lastStart != 0L && wait > 0) delay(wait)
-                            lastStart = System.currentTimeMillis()
-                        }
-                        try {
-                            if (task.uri.isBlank())
-                                throw IllegalStateException("no video id in the link")
-                            val scenes = Gemini.analyseVideo(plan, task)
-                            Api.postAnalysis(task.url, task.key, scenes)
-                            synchronized(this@PipelineViewModel) { ok++ }
-                            note("  ok  ${scenes.size} scenes — ${task.url.takeLast(40)}")
-                        } catch (e: Gemini.QuotaExhausted) {
-                            synchronized(this@PipelineViewModel) { failed++ }
-                            note("  quota reached — stopping. ${e.message?.take(90)}")
-                            throw e
-                        } catch (e: Exception) {
-                            synchronized(this@PipelineViewModel) { failed++ }
-                            note("  x  ${task.url.takeLast(40)} -> ${e.message?.take(90)}")
-                        } finally {
+                        lanesSem.withPermit {
+                            var attempt = 0
+                            while (true) {
+                                attempt++
+                                awaitSlot()
+                                try {
+                                    if (task.uri.isBlank())
+                                        throw IllegalStateException("no video id in the link")
+                                    val scenes = Gemini.analyseVideo(plan, task)
+                                    Api.postAnalysis(task.url, task.key, scenes)
+                                    synchronized(this@PipelineViewModel) { ok++ }
+                                    note("  ok  ${scenes.size} scenes — " +
+                                         task.url.takeLast(38))
+                                    break
+                                } catch (e: Gemini.QuotaExhausted) {
+                                    // Google states the exact wait. Hold every
+                                    // lane for it rather than hammering, then
+                                    // pick this video up again.
+                                    val waitMs = e.retryAfterMs.coerceIn(5_000, 120_000)
+                                    gate.withLock {
+                                        pausedUntil = maxOf(pausedUntil,
+                                            System.currentTimeMillis() + waitMs)
+                                    }
+                                    synchronized(this@PipelineViewModel) { retried++ }
+                                    if (attempt == 1) {
+                                        note("  quota reached — pausing " +
+                                             "${waitMs / 1000}s, then continuing.")
+                                    }
+                                    if (attempt >= 6) {
+                                        synchronized(this@PipelineViewModel) { failed++ }
+                                        note("  x  quota kept refusing — " +
+                                             task.url.takeLast(38))
+                                        break
+                                    }
+                                } catch (e: java.io.IOException) {
+                                    // DNS blips and dropped sockets are normal on
+                                    // mobile. Back off and try the same video again.
+                                    if (attempt >= 4) {
+                                        synchronized(this@PipelineViewModel) { failed++ }
+                                        note("  x  ${task.url.takeLast(30)} -> " +
+                                             (e.message?.take(70) ?: "network error"))
+                                        break
+                                    }
+                                    synchronized(this@PipelineViewModel) { retried++ }
+                                    note("    network hiccup, retry $attempt — " +
+                                         task.url.takeLast(28))
+                                    delay(3000L * attempt)
+                                } catch (e: Exception) {
+                                    synchronized(this@PipelineViewModel) { failed++ }
+                                    note("  x  ${task.url.takeLast(30)} -> " +
+                                         (e.message?.take(70) ?: e::class.simpleName))
+                                    break
+                                }
+                            }
                             _ui.update { it.copy(localDone = it.localDone + 1) }
                         }
                     }
@@ -349,9 +405,13 @@ class PipelineViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val secs = (System.currentTimeMillis() - started) / 1000
-            note("Analysed $ok, failed $failed, in ${secs}s. " +
-                 "Modal now has every timestamp it needs.")
-            say("Analysis done on this phone. Run the cut next.")
+            note("Analysed $ok, failed $failed, retries $retried, in ${secs}s.")
+            if (failed > 0) {
+                note("Tap Analyse here again — finished videos are cached, so it " +
+                     "only retries the $failed that did not land.")
+            }
+            say(if (failed == 0) "All videos analysed."
+                else "$ok done, $failed left. Tap again to retry those.")
         } catch (e: Exception) {
             val why = e.message?.takeIf { m -> m.isNotBlank() }
                 ?: e::class.simpleName ?: "unknown error"

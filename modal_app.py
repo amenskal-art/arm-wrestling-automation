@@ -123,6 +123,7 @@ DEFAULT_CONFIG = {
     "low_res_over_minutes": 20,
     "delete_originals": True,
     "analyze_workers": 8,
+    "phone_workers": 2,
     # stage 4
     "model_fx": "gemini-3.5-flash",
     "hand_fx_mode": "AI-decided",
@@ -868,6 +869,10 @@ def web():
             "prompt": "Catalog every arm wrestling scene per the schema.",
             "schema": schema,
             "min_interval_ms": int(M._MODEL_INTERVAL.get(model, 13.0) * 1000),
+            # Videos are enormous in tokens and the free tier caps input tokens
+            # per minute, so only a couple may overlap however fast requests
+            # are allowed to start.
+            "max_concurrent": int(cfg.get("phone_workers", 2)),
             "todo": todo,
             "cached": len(links) - len(todo),
             "total": len(links),

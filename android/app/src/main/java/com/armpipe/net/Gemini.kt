@@ -29,6 +29,8 @@ data class AnalysisPlan(
     val prompt: String = "",
     val schema: JsonObject = JsonObject(emptyMap()),
     val min_interval_ms: Long = 13_000,
+    /** How many analyses may overlap. Low, because tokens/minute binds first. */
+    val max_concurrent: Int = 2,
     val todo: List<AnalysisTask> = emptyList(),
     val cached: Int = 0,
     val total: Int = 0,
@@ -55,7 +57,31 @@ object Gemini {
     private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    class QuotaExhausted(message: String) : IOException(message)
+    /**
+     * A 429. Google tells us exactly how long to wait in the error body, so
+     * carry that through instead of guessing at a backoff.
+     */
+    class QuotaExhausted(message: String, val retryAfterMs: Long) : IOException(message)
+
+    /** Pulls "Please retry in 41.0765s" / RetryInfo out of an error payload. */
+    private fun retryDelayMs(body: String): Long {
+        runCatching {
+            val details = json.parseToJsonElement(body).jsonObject["error"]
+                ?.jsonObject?.get("details")?.jsonArray
+            details?.forEach { d ->
+                val o = d.jsonObject
+                if (o["@type"]?.jsonPrimitive?.contentOrNull?.endsWith("RetryInfo") == true) {
+                    val raw = o["retryDelay"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val secs = raw.removeSuffix("s").toDoubleOrNull()
+                    if (secs != null) return (secs * 1000).toLong()
+                }
+            }
+        }
+        val m = Regex("retry in ([0-9.]+)s").find(body)
+            ?: Regex("retryDelay\"?:\\s*\"?([0-9.]+)s").find(body)
+        val secs = m?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+        return ((secs ?: 30.0) * 1000).toLong()
+    }
 
     private suspend fun call(req: Request): String =
         suspendCancellableCoroutine { cont ->
@@ -74,7 +100,9 @@ object Gemini {
                                 ?.jsonObject?.get("message")?.jsonPrimitive?.content
                         }.getOrNull() ?: "HTTP ${it.code}"
                         cont.resumeWithException(
-                            if (it.code == 429) QuotaExhausted(msg) else IOException(msg)
+                            if (it.code == 429)
+                                QuotaExhausted(msg, retryDelayMs(body))
+                            else IOException(msg)
                         )
                     }
                 }
